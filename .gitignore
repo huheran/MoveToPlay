@@ -1,0 +1,28 @@
+# ESP-IDF 构建产物
+build/
+sdkconfig
+sdkconfig.old
+
+# 组件管理缓存
+managed_components/
+dependencies.lock
+
+# CMake 产物
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+
+# 临时文件
+*.log
+*.tmp
+*.swp
+*.swo
+*~
+__pycache__/
+.DS_Store
+Thumbs.db
+
+# 编辑器本地配置
+.vscode/
+.idea/
