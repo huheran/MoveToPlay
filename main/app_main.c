@@ -3,7 +3,7 @@
 #include <stdio.h>
 
 #include "driver/gpio.h"
-#include "driver/i2c_master.h"
+#include "driver/spi_master.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -14,13 +14,12 @@
 static const char *TAG = "imu_main";
 
 #define BOARD_NODE_ID                 1
-#define IMU_I2C_PORT                  0
-#define IMU_I2C_SCL_GPIO              GPIO_NUM_14
-#define IMU_I2C_SDA_GPIO              GPIO_NUM_13
-#define IMU_I2C_CLK_HZ                400000
-#define IMU_CS_GPIO                   GPIO_NUM_12
-#define IMU_SA0_GPIO                  GPIO_NUM_11
-#define IMU_SA0_LEVEL                 0
+#define IMU_SPI_HOST                  SPI2_HOST
+#define IMU_SPI_SCLK_GPIO             GPIO_NUM_14
+#define IMU_SPI_MOSI_GPIO             GPIO_NUM_13
+#define IMU_SPI_MISO_GPIO             GPIO_NUM_11
+#define IMU_SPI_CS_GPIO               GPIO_NUM_12
+#define IMU_SPI_CLK_HZ                1000000
 #define IMU_SAMPLE_RATE_HZ            100
 #define IMU_SAMPLE_PERIOD_MS          (1000 / IMU_SAMPLE_RATE_HZ)
 #define IMU_PRINT_DECIMATION          10
@@ -32,8 +31,6 @@ static const char *TAG = "imu_main";
 
 /* 预留后续按键/串口命令控制，第一版默认开启采样 */
 static bool sampling_enabled = true;
-
-static i2c_master_bus_handle_t s_i2c_bus = NULL;
 
 static void led_init(void)
 {
@@ -59,30 +56,24 @@ static void led_blink_startup(uint32_t times, uint32_t on_ms, uint32_t off_ms)
 
 static void imu_ctrl_pins_init(void)
 {
-    /* LSM6DSV: CS=1 进入 I2C 模式，SA0 决定地址(0x6A/0x6B) */
-    gpio_reset_pin(IMU_CS_GPIO);
-    gpio_set_direction(IMU_CS_GPIO, GPIO_MODE_OUTPUT);
-    gpio_set_level(IMU_CS_GPIO, 1);
-
-    gpio_reset_pin(IMU_SA0_GPIO);
-    gpio_set_direction(IMU_SA0_GPIO, GPIO_MODE_OUTPUT);
-    gpio_set_level(IMU_SA0_GPIO, IMU_SA0_LEVEL);
+    /* SPI 片选空闲为高；后续由 SPI 驱动接管 CS 翻转。 */
+    gpio_reset_pin(IMU_SPI_CS_GPIO);
+    gpio_set_direction(IMU_SPI_CS_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_level(IMU_SPI_CS_GPIO, 1);
 }
 
-static esp_err_t i2c_master_init(void)
+static esp_err_t spi_master_init(void)
 {
-    i2c_master_bus_config_t bus_cfg = {
-        .i2c_port = IMU_I2C_PORT,
-        .sda_io_num = IMU_I2C_SDA_GPIO,
-        .scl_io_num = IMU_I2C_SCL_GPIO,
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .intr_priority = 0,
-        .trans_queue_depth = 0,
-        .flags.enable_internal_pullup = true,
+    spi_bus_config_t bus_cfg = {
+        .mosi_io_num = IMU_SPI_MOSI_GPIO,
+        .miso_io_num = IMU_SPI_MISO_GPIO,
+        .sclk_io_num = IMU_SPI_SCLK_GPIO,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = 16,
     };
 
-    return i2c_new_master_bus(&bus_cfg, &s_i2c_bus);
+    return spi_bus_initialize(IMU_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
 }
 
 static void print_csv_header(void)
@@ -94,8 +85,12 @@ static void print_csv_header(void)
 
 static void imu_error_loop(void)
 {
-    ESP_LOGE(TAG, "IMU init failed. Check wiring/power and SA0 level.");
-    ESP_LOGE(TAG, "Expected I2C addr: 0x%02X or 0x%02X", IMU_LSM6DSV_I2C_ADDRESS_LOW, IMU_LSM6DSV_I2C_ADDRESS_HIGH);
+    ESP_LOGE(TAG, "IMU init failed. Check wiring/power and SPI pins.");
+    ESP_LOGE(TAG, "SPI pins: SCLK=%d MOSI=%d MISO=%d CS=%d",
+             IMU_SPI_SCLK_GPIO,
+             IMU_SPI_MOSI_GPIO,
+             IMU_SPI_MISO_GPIO,
+             IMU_SPI_CS_GPIO);
 
     while (1) {
         /* 快闪三次 + 间隔，便于肉眼识别错误状态 */
@@ -160,24 +155,24 @@ void app_main(void)
     imu_ctrl_pins_init();
     led_blink_startup(3, 120, 120);
 
-    uint8_t imu_addr_in_use = (IMU_SA0_LEVEL == 0) ? IMU_LSM6DSV_I2C_ADDRESS_LOW : IMU_LSM6DSV_I2C_ADDRESS_HIGH;
-
-    ESP_LOGI(TAG, "Booting ESP32-S3 IMU logger");
+    ESP_LOGI(TAG, "Booting ESP32-S3 SPI IMU logger");
     ESP_LOGI(TAG, "node_id=%d", BOARD_NODE_ID);
-    ESP_LOGI(TAG, "I2C pins: SCL=%d SDA=%d", IMU_I2C_SCL_GPIO, IMU_I2C_SDA_GPIO);
-    ESP_LOGI(TAG, "IMU ctrl pins: CS=%d SA0=%d(level=%d)", IMU_CS_GPIO, IMU_SA0_GPIO, IMU_SA0_LEVEL);
-    ESP_LOGI(TAG, "IMU addr(pref): 0x%02X", imu_addr_in_use);
+    ESP_LOGI(TAG, "SPI pins: SCLK=%d MOSI=%d MISO=%d CS=%d",
+             IMU_SPI_SCLK_GPIO,
+             IMU_SPI_MOSI_GPIO,
+             IMU_SPI_MISO_GPIO,
+             IMU_SPI_CS_GPIO);
+    ESP_LOGI(TAG, "SPI clk_hz=%d", IMU_SPI_CLK_HZ);
     ESP_LOGI(TAG, "sample_rate_hz=%d", IMU_SAMPLE_RATE_HZ);
 
-    if (i2c_master_init() != ESP_OK) {
-        ESP_LOGE(TAG, "I2C master init failed");
+    if (spi_master_init() != ESP_OK) {
+        ESP_LOGE(TAG, "SPI bus init failed");
         imu_error_loop();
     }
 
-    if (imu_lsm6dsv_init(s_i2c_bus, imu_addr_in_use) != ESP_OK) {
+    if (imu_lsm6dsv_init(IMU_SPI_HOST, IMU_SPI_CS_GPIO, IMU_SPI_CLK_HZ) != ESP_OK) {
         imu_error_loop();
     }
-    ESP_LOGI(TAG, "IMU addr(active): 0x%02X", imu_addr_in_use);
 
     /* IMU 初始化成功后常亮短暂停留，再进入采样闪烁 */
     led_set(true);

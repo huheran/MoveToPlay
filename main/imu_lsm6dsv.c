@@ -1,6 +1,7 @@
 #include "imu_lsm6dsv.h"
 
 #include <stddef.h>
+#include <string.h>
 
 #include "esp_check.h"
 #include "esp_log.h"
@@ -47,13 +48,12 @@ static const char *TAG = "imu_lsm6dsv";
 #define ACCEL_SENS_G_PER_LSB  0.000122f
 #define GYRO_SENS_DPS_PER_LSB 0.035f
 
-static i2c_master_dev_handle_t s_imu_dev = NULL;
-static uint8_t s_imu_addr = IMU_LSM6DSV_I2C_ADDRESS;
+static spi_device_handle_t s_imu_dev = NULL;
 
 static void imu_detach_device(void)
 {
     if (s_imu_dev != NULL) {
-        i2c_master_bus_rm_device(s_imu_dev);
+        spi_bus_remove_device(s_imu_dev);
         s_imu_dev = NULL;
     }
 }
@@ -61,15 +61,38 @@ static void imu_detach_device(void)
 static esp_err_t imu_read_reg(uint8_t reg, uint8_t *data, size_t len)
 {
     ESP_RETURN_ON_FALSE(s_imu_dev != NULL, ESP_ERR_INVALID_STATE, TAG, "IMU device not initialized");
-    return i2c_master_transmit_receive(s_imu_dev, &reg, 1, data, len, -1);
+    ESP_RETURN_ON_FALSE(data != NULL, ESP_ERR_INVALID_ARG, TAG, "read data is NULL");
+    ESP_RETURN_ON_FALSE((len > 0) && (len <= 15), ESP_ERR_INVALID_SIZE, TAG, "read len invalid");
+
+    uint8_t tx_buf[16] = {0};
+    uint8_t rx_buf[16] = {0};
+
+    tx_buf[0] = reg | 0x80U;
+
+    spi_transaction_t trans = {
+        .length = (len + 1U) * 8U,
+        .tx_buffer = tx_buf,
+        .rx_buffer = rx_buf,
+    };
+
+    esp_err_t err = spi_device_transmit(s_imu_dev, &trans);
+    if (err == ESP_OK) {
+        memcpy(data, &rx_buf[1], len);
+    }
+    return err;
 }
 
 static esp_err_t imu_write_reg(uint8_t reg, uint8_t value)
 {
     ESP_RETURN_ON_FALSE(s_imu_dev != NULL, ESP_ERR_INVALID_STATE, TAG, "IMU device not initialized");
 
-    uint8_t tx_buf[2] = {reg, value};
-    return i2c_master_transmit(s_imu_dev, tx_buf, sizeof(tx_buf), -1);
+    uint8_t tx_buf[2] = {reg & 0x7FU, value};
+    spi_transaction_t trans = {
+        .length = sizeof(tx_buf) * 8U,
+        .tx_buffer = tx_buf,
+    };
+
+    return spi_device_transmit(s_imu_dev, &trans);
 }
 
 static int16_t axis_from_le(const uint8_t *buf)
@@ -203,22 +226,21 @@ static void imu_dump_startup_snapshot(void)
     }
 }
 
-esp_err_t imu_lsm6dsv_init(i2c_master_bus_handle_t bus, uint8_t device_address)
+esp_err_t imu_lsm6dsv_init(spi_host_device_t host, int cs_gpio, int clock_hz)
 {
-    ESP_RETURN_ON_FALSE(bus != NULL, ESP_ERR_INVALID_ARG, TAG, "bus handle is NULL");
+    ESP_RETURN_ON_FALSE(clock_hz > 0, ESP_ERR_INVALID_ARG, TAG, "clock_hz invalid");
 
     imu_detach_device();
 
-    s_imu_addr = device_address;
-
-    i2c_device_config_t dev_cfg = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address = s_imu_addr,
-        .scl_speed_hz = 400000,
+    spi_device_interface_config_t dev_cfg = {
+        .clock_speed_hz = clock_hz,
+        .mode = 3,
+        .spics_io_num = cs_gpio,
+        .queue_size = 1,
     };
 
-    esp_err_t err = i2c_master_bus_add_device(bus, &dev_cfg, &s_imu_dev);
-    ESP_RETURN_ON_ERROR(err, TAG, "add i2c device failed");
+    esp_err_t err = spi_bus_add_device(host, &dev_cfg, &s_imu_dev);
+    ESP_RETURN_ON_ERROR(err, TAG, "add spi device failed");
 
     uint8_t who_am_i = 0;
     err = imu_read_reg(REG_WHO_AM_I, &who_am_i, 1);
@@ -273,7 +295,7 @@ esp_err_t imu_lsm6dsv_init(i2c_master_bus_handle_t bus, uint8_t device_address)
     vTaskDelay(pdMS_TO_TICKS(20));
 
     imu_dump_startup_snapshot();
-    ESP_LOGI(TAG, "LSM6DSV init ok, WHO_AM_I=0x%02X, addr=0x%02X", who_am_i, s_imu_addr);
+    ESP_LOGI(TAG, "LSM6DSV init ok, WHO_AM_I=0x%02X, spi_host=%d", who_am_i, host);
     return ESP_OK;
 
 init_fail:
