@@ -23,8 +23,8 @@ static const char *TAG = "imu_lsm6dsv";
 #define REG_CTRL7_G           0x16
 #define REG_CTRL8_XL          0x17
 #define REG_STATUS_REG        0x1E
-#define REG_OUTX_L_G          0x22
-#define REG_OUTX_L_A          0x28
+#define REG_OUTX_L_G          0x28
+#define REG_OUTX_L_A          0x22
 
 #define STATUS_GDA_BIT        (1U << 1)
 
