@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -10,6 +11,7 @@
 #include "freertos/task.h"
 
 #include "imu_lsm6dsv.h"
+#include "m2p_espnow.h"
 #include "usb_keyboard.h"
 
 static const char *TAG = "imu_main";
@@ -17,8 +19,25 @@ static const char *TAG = "imu_main";
 #define MOVE_TO_PLAY_MODE_DONGLE      0
 #define MOVE_TO_PLAY_MODE_TRACKER     1
 
-/* 改这里选择固件角色：0 = dongle，1 = tracker。 */
+/*
+ * User build options.
+ *
+ * MOVE_TO_PLAY_DEVICE_MODE:
+ *   MOVE_TO_PLAY_MODE_DONGLE  = USB dongle. Receive ESP-NOW packets and print them to serial.
+ *   MOVE_TO_PLAY_MODE_TRACKER = Wearable tracker. Read IMU samples and send them by ESP-NOW.
+ *
+ * DONGLE_ENABLE_USB_KEYBOARD:
+ *   0 = serial output only. This is the current debug/default dongle behavior.
+ *   1 = enable TinyUSB HID keyboard support for later game-control tests.
+ */
 #define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_TRACKER
+
+#define MOVE_TO_PLAY_ENABLE_ESPNOW        1
+#define MOVE_TO_PLAY_ESPNOW_SEND_SAMPLES  1
+
+#define DONGLE_ENABLE_SERIAL_OUTPUT       1
+#define DONGLE_ENABLE_USB_KEYBOARD        0
+#define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
 
 #define BOARD_NODE_ID                 1
 #define IMU_SPI_HOST                  SPI2_HOST
@@ -30,6 +49,7 @@ static const char *TAG = "imu_main";
 #define IMU_SAMPLE_RATE_HZ            100
 #define IMU_SAMPLE_PERIOD_MS          (1000 / IMU_SAMPLE_RATE_HZ)
 #define IMU_PRINT_DECIMATION          10
+#define ESPNOW_RX_PRINT_DECIMATION    10
 
 #define STATUS_LED_GPIO               GPIO_NUM_38
 #define STATUS_LED_ON_LEVEL           1
@@ -43,6 +63,10 @@ static const char *TAG = "imu_main";
 #if (MOVE_TO_PLAY_DEVICE_MODE != MOVE_TO_PLAY_MODE_DONGLE) && \
     (MOVE_TO_PLAY_DEVICE_MODE != MOVE_TO_PLAY_MODE_TRACKER)
 #error "MOVE_TO_PLAY_DEVICE_MODE must be 0 (dongle) or 1 (tracker)"
+#endif
+
+#if DONGLE_ENABLE_USB_KEYBOARD_TEST && !DONGLE_ENABLE_USB_KEYBOARD
+#error "DONGLE_ENABLE_USB_KEYBOARD_TEST requires DONGLE_ENABLE_USB_KEYBOARD"
 #endif
 
 /* 预留后续按键/串口命令控制，第一版默认开启采样 */
@@ -139,6 +163,12 @@ static void imu_sampling_task(void *arg)
         }
 
         if (data_valid) {
+#if MOVE_TO_PLAY_ENABLE_ESPNOW && MOVE_TO_PLAY_ESPNOW_SEND_SAMPLES
+            esp_err_t send_err = m2p_espnow_send_tracker_sample(BOARD_NODE_ID, sample_index, &sample);
+            if (send_err != ESP_OK && (sample_index % IMU_SAMPLE_RATE_HZ) == 0) {
+                ESP_LOGW(TAG, "ESP-NOW send failed: %s", esp_err_to_name(send_err));
+            }
+#endif
 
             if ((sample_index % IMU_PRINT_DECIMATION) == 0) {
                 printf("%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
@@ -165,6 +195,49 @@ static void imu_sampling_task(void *arg)
     }
 }
 
+#if MOVE_TO_PLAY_ENABLE_ESPNOW
+static void espnow_rx_task(void *arg)
+{
+    (void)arg;
+
+    uint32_t packet_count = 0;
+
+    ESP_LOGI(TAG, "dongle waiting for ESP-NOW tracker packets");
+
+    while (1) {
+        m2p_espnow_rx_packet_t rx_packet = {0};
+        if (!m2p_espnow_receive(&rx_packet, 1000)) {
+            continue;
+        }
+
+        packet_count++;
+
+#if DONGLE_ENABLE_SERIAL_OUTPUT
+        if ((packet_count % ESPNOW_RX_PRINT_DECIMATION) == 0) {
+            const m2p_espnow_tracker_packet_t *packet = &rx_packet.packet;
+            printf("rx,node=%u,seq=%" PRIu32 ",src=%02X:%02X:%02X:%02X:%02X:%02X,"
+                   "ax=%.6f,ay=%.6f,az=%.6f,gx=%.6f,gy=%.6f,gz=%.6f\n",
+                   packet->node_id,
+                   packet->sequence,
+                   rx_packet.src_addr[0],
+                   rx_packet.src_addr[1],
+                   rx_packet.src_addr[2],
+                   rx_packet.src_addr[3],
+                   rx_packet.src_addr[4],
+                   rx_packet.src_addr[5],
+                   (double)packet->accel_g[0],
+                   (double)packet->accel_g[1],
+                   (double)packet->accel_g[2],
+                   (double)packet->gyro_dps[0],
+                   (double)packet->gyro_dps[1],
+                   (double)packet->gyro_dps[2]);
+        }
+#endif
+    }
+}
+#endif
+
+#if DONGLE_ENABLE_USB_KEYBOARD && DONGLE_ENABLE_USB_KEYBOARD_TEST
 static void usb_keyboard_test_task(void *arg)
 {
     (void)arg;
@@ -193,20 +266,44 @@ static void usb_keyboard_test_task(void *arg)
 
     vTaskDelete(NULL);
 }
+#endif
 
 static void start_dongle_mode(void)
 {
     ESP_LOGI(TAG, "Starting dongle mode");
-    ESP_LOGI(TAG, "role: receive tracker data and output USB keyboard");
+    ESP_LOGI(TAG, "role: receive tracker data");
+    ESP_LOGI(TAG, "esp-now channel=%d", M2P_ESPNOW_CHANNEL);
+    ESP_LOGI(TAG, "serial output=%d", DONGLE_ENABLE_SERIAL_OUTPUT);
+    ESP_LOGI(TAG, "usb keyboard=%d", DONGLE_ENABLE_USB_KEYBOARD);
 
     led_set(true);
 
+#if MOVE_TO_PLAY_ENABLE_ESPNOW
+    esp_err_t espnow_err = m2p_espnow_init(M2P_ESPNOW_ROLE_DONGLE, M2P_ESPNOW_CHANNEL);
+    if (espnow_err != ESP_OK) {
+        ESP_LOGW(TAG, "ESP-NOW init failed: %s", esp_err_to_name(espnow_err));
+        return;
+    }
+
+    xTaskCreatePinnedToCore(espnow_rx_task,
+                            "espnow_rx_task",
+                            4096,
+                            NULL,
+                            7,
+                            NULL,
+                            tskNO_AFFINITY);
+#else
+    ESP_LOGI(TAG, "ESP-NOW disabled by MOVE_TO_PLAY_ENABLE_ESPNOW");
+#endif
+
+#if DONGLE_ENABLE_USB_KEYBOARD
     esp_err_t usb_err = usb_keyboard_init();
     if (usb_err != ESP_OK) {
         ESP_LOGW(TAG, "USB keyboard init failed: %s", esp_err_to_name(usb_err));
         return;
     }
 
+#if DONGLE_ENABLE_USB_KEYBOARD_TEST
     xTaskCreatePinnedToCore(usb_keyboard_test_task,
                             "usb_keyboard_test",
                             3072,
@@ -214,6 +311,10 @@ static void start_dongle_mode(void)
                             5,
                             NULL,
                             tskNO_AFFINITY);
+#endif
+#else
+    ESP_LOGI(TAG, "USB keyboard disabled for ESP-NOW serial test");
+#endif
 }
 
 static void start_tracker_mode(void)
@@ -228,6 +329,17 @@ static void start_tracker_mode(void)
              IMU_SPI_CS_GPIO);
     ESP_LOGI(TAG, "SPI clk_hz=%d", IMU_SPI_CLK_HZ);
     ESP_LOGI(TAG, "sample_rate_hz=%d", IMU_SAMPLE_RATE_HZ);
+    ESP_LOGI(TAG, "esp-now channel=%d", M2P_ESPNOW_CHANNEL);
+    ESP_LOGI(TAG, "esp-now send_samples=%d", MOVE_TO_PLAY_ESPNOW_SEND_SAMPLES);
+
+#if MOVE_TO_PLAY_ENABLE_ESPNOW
+    esp_err_t espnow_err = m2p_espnow_init(M2P_ESPNOW_ROLE_TRACKER, M2P_ESPNOW_CHANNEL);
+    if (espnow_err != ESP_OK) {
+        ESP_LOGW(TAG, "ESP-NOW init failed: %s", esp_err_to_name(espnow_err));
+    }
+#else
+    ESP_LOGI(TAG, "ESP-NOW disabled by MOVE_TO_PLAY_ENABLE_ESPNOW");
+#endif
 
     imu_ctrl_pins_init();
 
