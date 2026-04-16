@@ -41,10 +41,10 @@ static const char *TAG = "imu_main";
 
 #define BOARD_NODE_ID                 1
 #define IMU_SPI_HOST                  SPI2_HOST
-#define IMU_SPI_SCLK_GPIO             GPIO_NUM_14
-#define IMU_SPI_MOSI_GPIO             GPIO_NUM_13
-#define IMU_SPI_MISO_GPIO             GPIO_NUM_11
-#define IMU_SPI_CS_GPIO               GPIO_NUM_12
+#define IMU_SPI_SCLK_GPIO             GPIO_NUM_12
+#define IMU_SPI_MOSI_GPIO             GPIO_NUM_11
+#define IMU_SPI_MISO_GPIO             GPIO_NUM_9
+#define IMU_SPI_CS_GPIO               GPIO_NUM_10
 #define IMU_SPI_CLK_HZ                1000000
 #define IMU_SAMPLE_RATE_HZ            100
 #define IMU_SAMPLE_PERIOD_MS          (1000 / IMU_SAMPLE_RATE_HZ)

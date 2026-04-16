@@ -23,8 +23,8 @@ static const char *TAG = "imu_lsm6dsv";
 #define REG_CTRL7_G           0x16
 #define REG_CTRL8_XL          0x17
 #define REG_STATUS_REG        0x1E
-#define REG_OUTX_L_G          0x28
-#define REG_OUTX_L_A          0x22
+#define REG_OUTX_L_G          0x22
+#define REG_OUTX_L_A          0x28
 
 #define STATUS_GDA_BIT        (1U << 1)
 
@@ -32,14 +32,14 @@ static const char *TAG = "imu_lsm6dsv";
 #define WHO_AM_I_LSM6DSV      0x70
 #define WHO_AM_I_LSM6DSV_ALT  0x71
 
-/* ODR=104Hz(最接近 100Hz)，FS_XL=+-4g，FS_G=+-1000dps */
+/* ODR code 0x4, FS_XL=+-4g, FS_G=+-1000dps */
 #define CTRL1_XL_104HZ_4G     0x4A
 #define CTRL2_G_104HZ_1000DPS 0x48
 #define CTRL3_C_BDU_IF_INC    0x44
 #define CTRL4_C_DEFAULT        0x00
-#define CTRL6_C_DEFAULT        0x00
+#define CTRL6_C_1000DPS        0x03
 #define CTRL7_G_DEFAULT        0x00
-#define CTRL8_XL_DEFAULT       0x00
+#define CTRL8_XL_4G            0x01
 
 /* 灵敏度：
  * accel FS=+-4g => 0.122 mg/LSB = 0.000122 g/LSB
@@ -272,7 +272,7 @@ esp_err_t imu_lsm6dsv_init(spi_host_device_t host, int cs_gpio, int clock_hz)
     if (err != ESP_OK) {
         goto init_fail;
     }
-    err = imu_write_reg(REG_CTRL6_C, CTRL6_C_DEFAULT);
+    err = imu_write_reg(REG_CTRL6_C, CTRL6_C_1000DPS);
     if (err != ESP_OK) {
         goto init_fail;
     }
@@ -280,7 +280,7 @@ esp_err_t imu_lsm6dsv_init(spi_host_device_t host, int cs_gpio, int clock_hz)
     if (err != ESP_OK) {
         goto init_fail;
     }
-    err = imu_write_reg(REG_CTRL8_XL, CTRL8_XL_DEFAULT);
+    err = imu_write_reg(REG_CTRL8_XL, CTRL8_XL_4G);
     if (err != ESP_OK) {
         goto init_fail;
     }
