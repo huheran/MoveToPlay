@@ -20,6 +20,7 @@ compile_commands.json
 *.swo
 *~
 __pycache__/
+logs/
 .DS_Store
 Thumbs.db
 
