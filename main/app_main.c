@@ -55,6 +55,8 @@ static const char *TAG = "imu_main";
 #define STATUS_LED_ON_LEVEL           1
 
 #define ERROR_BLINK_PAUSE_MS          1500
+#define TRACKER_LED_HEARTBEAT_PERIOD_MS 2000
+#define TRACKER_LED_HEARTBEAT_ON_MS      120
 
 #define USB_KEYBOARD_TEST_READY_TIMEOUT_MS 15000
 #define USB_KEYBOARD_TEST_START_DELAY_MS   8000
@@ -150,7 +152,7 @@ static void imu_sampling_task(void *arg)
 
     TickType_t last_wake = xTaskGetTickCount();
     uint32_t sample_index = 0;
-    uint32_t led_divider = 0;
+    uint32_t led_heartbeat_ms = 0;
 
     while (1) {
         imu_sample_t sample = {0};
@@ -182,13 +184,11 @@ static void imu_sampling_task(void *arg)
             sample_index++;
         }
 
-        /* 采样阶段周期闪烁：约 5Hz 可见闪烁 */
-        led_divider++;
-        if (led_divider >= (IMU_SAMPLE_RATE_HZ / 10)) {
-            led_divider = 0;
-            led_set(true);
-        } else if (led_divider == 1) {
-            led_set(false);
+        /* Normal tracker heartbeat: mostly off, one short pulse every few seconds. */
+        led_set(led_heartbeat_ms < TRACKER_LED_HEARTBEAT_ON_MS);
+        led_heartbeat_ms += IMU_SAMPLE_PERIOD_MS;
+        if (led_heartbeat_ms >= TRACKER_LED_HEARTBEAT_PERIOD_MS) {
+            led_heartbeat_ms = 0;
         }
 
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(IMU_SAMPLE_PERIOD_MS));
