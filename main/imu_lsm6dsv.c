@@ -10,10 +10,7 @@
 
 static const char *TAG = "imu_lsm6dsv";
 
-/*
- * LSM6DSV 寄存器映射在控制寄存器上与 LSM6DSO 系列兼容。
- * 若后续使用的子型号寄存器有差异，只需在此处微调寄存器地址和配置值。
- */
+/* LSM6DSV: CTRL1/CTRL2 select ODR+mode, FS is configured in CTRL6/CTRL8. */
 #define REG_WHO_AM_I          0x0F
 #define REG_CTRL1_XL          0x10
 #define REG_CTRL2_G           0x11
@@ -26,15 +23,16 @@ static const char *TAG = "imu_lsm6dsv";
 #define REG_OUTX_L_G          0x22
 #define REG_OUTX_L_A          0x28
 
+#define STATUS_XLDA_BIT       (1U << 0)
 #define STATUS_GDA_BIT        (1U << 1)
 
 /* 常见 WHO_AM_I：LSM6DSV16X = 0x70。不同料号可在此扩展。 */
 #define WHO_AM_I_LSM6DSV      0x70
 #define WHO_AM_I_LSM6DSV_ALT  0x71
 
-/* ODR code 0x4, FS_XL=+-4g, FS_G=+-1000dps */
-#define CTRL1_XL_104HZ_4G     0x4A
-#define CTRL2_G_104HZ_1000DPS 0x48
+/* 120 Hz + high-performance on both sensors. */
+#define CTRL1_XL_120HZ_HP     0x06
+#define CTRL2_G_120HZ_HP      0x06
 #define CTRL3_C_BDU_IF_INC    0x44
 #define CTRL4_C_DEFAULT        0x00
 #define CTRL6_C_1000DPS        0x03
@@ -100,32 +98,47 @@ static int16_t axis_from_le(const uint8_t *buf)
     return (int16_t)((buf[1] << 8) | buf[0]);
 }
 
-static bool imu_has_gyro_data_ready(uint32_t timeout_ms)
+static bool imu_wait_for_ready_bits(uint8_t required_bits, uint32_t timeout_ms, uint8_t *out_status)
 {
-    const TickType_t delay_tick = pdMS_TO_TICKS(5);
-    const uint32_t loops = (timeout_ms / 5U) + 1U;
+    const TickType_t delay_tick = pdMS_TO_TICKS(1);
+    const uint32_t loops = timeout_ms + 1U;
 
     for (uint32_t i = 0; i < loops; i++) {
         uint8_t status = 0;
-        uint8_t raw_g[6] = {0};
-        if (imu_read_reg(REG_STATUS_REG, &status, 1) != ESP_OK) {
-            continue;
-        }
-        if ((status & STATUS_GDA_BIT) == 0) {
-            vTaskDelay(delay_tick);
-            continue;
-        }
-
-        if (imu_read_reg(REG_OUTX_L_G, raw_g, sizeof(raw_g)) == ESP_OK) {
-            const int16_t gx = axis_from_le(&raw_g[0]);
-            const int16_t gy = axis_from_le(&raw_g[2]);
-            const int16_t gz = axis_from_le(&raw_g[4]);
-            if (gx != 0 || gy != 0 || gz != 0) {
+        if (imu_read_reg(REG_STATUS_REG, &status, 1) == ESP_OK) {
+            if ((status & required_bits) == required_bits) {
+                if (out_status != NULL) {
+                    *out_status = status;
+                }
                 return true;
+            }
+
+            if (out_status != NULL) {
+                *out_status = status;
             }
         }
 
         vTaskDelay(delay_tick);
+    }
+
+    return false;
+}
+
+static bool imu_has_gyro_data_ready(uint32_t timeout_ms)
+{
+    uint8_t raw_g[6] = {0};
+
+    if (!imu_wait_for_ready_bits(STATUS_GDA_BIT, timeout_ms, NULL)) {
+        return false;
+    }
+
+    if (imu_read_reg(REG_OUTX_L_G, raw_g, sizeof(raw_g)) == ESP_OK) {
+        const int16_t gx = axis_from_le(&raw_g[0]);
+        const int16_t gy = axis_from_le(&raw_g[2]);
+        const int16_t gz = axis_from_le(&raw_g[4]);
+        if (gx != 0 || gy != 0 || gz != 0) {
+            return true;
+        }
     }
 
     return false;
@@ -137,14 +150,7 @@ static esp_err_t imu_try_enable_gyro(void)
      * 不同 LSM6DSV/变体在 CTRL2_G 编码细节可能不同。
      * 这里尝试一组保守候选值，以 STATUS_GDA + raw_g 非零作为成功判据。
      */
-    static const uint8_t gyro_ctrl2_candidates[] = {
-        0x48, /* current assumption: 104Hz + 1000dps */
-        0x4C,
-        0x44,
-        0x84,
-        0x40,
-        0x04,
-    };
+    static const uint8_t gyro_ctrl2_candidates[] = {0x06, 0x08, 0x05, 0x16};
 
     for (size_t i = 0; i < sizeof(gyro_ctrl2_candidates); i++) {
         const uint8_t val = gyro_ctrl2_candidates[i];
@@ -260,11 +266,11 @@ esp_err_t imu_lsm6dsv_init(spi_host_device_t host, int cs_gpio, int clock_hz)
     if (err != ESP_OK) {
         goto init_fail;
     }
-    err = imu_write_reg(REG_CTRL1_XL, CTRL1_XL_104HZ_4G);
+    err = imu_write_reg(REG_CTRL1_XL, CTRL1_XL_120HZ_HP);
     if (err != ESP_OK) {
         goto init_fail;
     }
-    err = imu_write_reg(REG_CTRL2_G, CTRL2_G_104HZ_1000DPS);
+    err = imu_write_reg(REG_CTRL2_G, CTRL2_G_120HZ_HP);
     if (err != ESP_OK) {
         goto init_fail;
     }
@@ -286,9 +292,11 @@ esp_err_t imu_lsm6dsv_init(spi_host_device_t host, int cs_gpio, int clock_hz)
     }
 
     /* 若默认配置无法启动 gyro，则进行一次候选探测。 */
-    err = imu_try_enable_gyro();
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "gyro still not ready after CTRL2_G probing");
+    if (!imu_has_gyro_data_ready(60)) {
+        err = imu_try_enable_gyro();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "gyro still not ready after CTRL2_G probing");
+        }
     }
 
     /* 给传感器配置稳定时间 */
@@ -308,8 +316,22 @@ esp_err_t imu_lsm6dsv_read_sample(imu_sample_t *out_sample)
 {
     ESP_RETURN_ON_FALSE(out_sample != NULL, ESP_ERR_INVALID_ARG, TAG, "out_sample is NULL");
 
+    static uint32_t s_not_ready_log_count = 0;
+
     uint8_t gyro_raw[6] = {0};
     uint8_t accel_raw[6] = {0};
+    uint8_t status = 0;
+
+    if (!imu_wait_for_ready_bits((uint8_t)(STATUS_XLDA_BIT | STATUS_GDA_BIT), 15, &status)) {
+        if ((s_not_ready_log_count++ % 25U) == 0U) {
+            ESP_LOGW(TAG,
+                     "sample skipped: STATUS_REG=0x%02X (XLDA=%u, GDA=%u), refusing mixed stale/fresh sample",
+                     status,
+                     (status & STATUS_XLDA_BIT) ? 1U : 0U,
+                     (status & STATUS_GDA_BIT) ? 1U : 0U);
+        }
+        return ESP_ERR_NOT_FOUND;
+    }
 
     ESP_RETURN_ON_ERROR(imu_read_reg(REG_OUTX_L_G, gyro_raw, sizeof(gyro_raw)), TAG, "read gyro failed");
     ESP_RETURN_ON_ERROR(imu_read_reg(REG_OUTX_L_A, accel_raw, sizeof(accel_raw)), TAG, "read accel failed");
