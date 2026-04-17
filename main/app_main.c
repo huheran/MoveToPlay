@@ -31,6 +31,7 @@ static const char *TAG = "imu_main";
  *   1 = enable TinyUSB HID keyboard support for later game-control tests.
  */
 #define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_TRACKER
+// #define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_DONGLE
 
 #define MOVE_TO_PLAY_ENABLE_ESPNOW        1
 #define MOVE_TO_PLAY_ESPNOW_SEND_SAMPLES  1
@@ -39,7 +40,9 @@ static const char *TAG = "imu_main";
 #define DONGLE_ENABLE_USB_KEYBOARD        0
 #define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
 
-#define BOARD_NODE_ID                 1
+#define BOARD_NODE_ID                 1 //chest
+//#define BOARD_NODE_ID                 2 //right arm
+
 #define IMU_SPI_HOST                  SPI2_HOST
 #define IMU_SPI_SCLK_GPIO             GPIO_NUM_12
 #define IMU_SPI_MOSI_GPIO             GPIO_NUM_11
