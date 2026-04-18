@@ -2,6 +2,7 @@
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
@@ -30,8 +31,8 @@ static const char *TAG = "imu_main";
  *   0 = serial output only. This is the current debug/default dongle behavior.
  *   1 = enable TinyUSB HID keyboard support for later game-control tests.
  */
-#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_TRACKER
-// #define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_DONGLE
+//#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_TRACKER
+#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_DONGLE
 
 #define MOVE_TO_PLAY_ENABLE_ESPNOW        1
 #define MOVE_TO_PLAY_ESPNOW_SEND_SAMPLES  1
@@ -40,8 +41,8 @@ static const char *TAG = "imu_main";
 #define DONGLE_ENABLE_USB_KEYBOARD        0
 #define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
 
-#define BOARD_NODE_ID                 1 //chest
-//#define BOARD_NODE_ID                 2 //right arm
+//#define BOARD_NODE_ID                 1 //chest
+#define BOARD_NODE_ID                 2 //right arm
 
 #define IMU_SPI_HOST                  SPI2_HOST
 #define IMU_SPI_SCLK_GPIO             GPIO_NUM_12
@@ -52,7 +53,9 @@ static const char *TAG = "imu_main";
 #define IMU_SAMPLE_RATE_HZ            100
 #define IMU_SAMPLE_PERIOD_MS          (1000 / IMU_SAMPLE_RATE_HZ)
 #define IMU_PRINT_DECIMATION          10
-#define ESPNOW_RX_PRINT_DECIMATION    10
+#define DONGLE_SERIAL_STATE_RATE_HZ   25
+#define DONGLE_SERIAL_STATE_PERIOD_MS (1000 / DONGLE_SERIAL_STATE_RATE_HZ)
+#define DONGLE_MAX_TRACKER_NODES      8
 
 #define STATUS_LED_GPIO               GPIO_NUM_38
 #define STATUS_LED_ON_LEVEL           1
@@ -72,6 +75,10 @@ static const char *TAG = "imu_main";
 
 #if DONGLE_ENABLE_USB_KEYBOARD_TEST && !DONGLE_ENABLE_USB_KEYBOARD
 #error "DONGLE_ENABLE_USB_KEYBOARD_TEST requires DONGLE_ENABLE_USB_KEYBOARD"
+#endif
+
+#if DONGLE_SERIAL_STATE_RATE_HZ <= 0
+#error "DONGLE_SERIAL_STATE_RATE_HZ must be greater than 0"
 #endif
 
 /* 预留后续按键/串口命令控制，第一版默认开启采样 */
@@ -199,41 +206,125 @@ static void imu_sampling_task(void *arg)
 }
 
 #if MOVE_TO_PLAY_ENABLE_ESPNOW
+#if DONGLE_ENABLE_SERIAL_OUTPUT
+typedef struct {
+    bool valid;
+    bool dirty;
+    uint8_t src_addr[6];
+    int64_t last_rx_us;
+    m2p_espnow_tracker_packet_t packet;
+} dongle_latest_node_t;
+
+static dongle_latest_node_t s_dongle_latest_nodes[DONGLE_MAX_TRACKER_NODES];
+
+static dongle_latest_node_t *dongle_latest_node_for_id(uint8_t node_id)
+{
+    if (node_id == 0 || node_id > DONGLE_MAX_TRACKER_NODES) {
+        return NULL;
+    }
+
+    return &s_dongle_latest_nodes[node_id - 1];
+}
+
+static void dongle_store_latest_packet(const m2p_espnow_rx_packet_t *rx_packet)
+{
+    const uint8_t node_id = rx_packet->packet.node_id;
+    dongle_latest_node_t *node = dongle_latest_node_for_id(node_id);
+    if (node == NULL) {
+        return;
+    }
+
+    node->valid = true;
+    node->dirty = true;
+    node->last_rx_us = esp_timer_get_time();
+    memcpy(node->src_addr, rx_packet->src_addr, sizeof(node->src_addr));
+    node->packet = rx_packet->packet;
+}
+
+static void dongle_print_latest_node(dongle_latest_node_t *node, int64_t now_us)
+{
+    const m2p_espnow_tracker_packet_t *packet = &node->packet;
+    const uint32_t age_ms = (uint32_t)((now_us - node->last_rx_us) / 1000);
+
+    printf("rx,node=%u,seq=%" PRIu32 ",timestamp_us=%" PRIu32
+           ",src=%02X:%02X:%02X:%02X:%02X:%02X,age_ms=%" PRIu32
+           ",ax=%.6f,ay=%.6f,az=%.6f,gx=%.6f,gy=%.6f,gz=%.6f\n",
+           packet->node_id,
+           packet->sequence,
+           packet->timestamp_us,
+           node->src_addr[0],
+           node->src_addr[1],
+           node->src_addr[2],
+           node->src_addr[3],
+           node->src_addr[4],
+           node->src_addr[5],
+           age_ms,
+           (double)packet->accel_g[0],
+           (double)packet->accel_g[1],
+           (double)packet->accel_g[2],
+           (double)packet->gyro_dps[0],
+           (double)packet->gyro_dps[1],
+           (double)packet->gyro_dps[2]);
+
+    node->dirty = false;
+}
+
+static void dongle_print_latest_states(void)
+{
+    const int64_t now_us = esp_timer_get_time();
+
+    for (size_t i = 0; i < DONGLE_MAX_TRACKER_NODES; i++) {
+        dongle_latest_node_t *node = &s_dongle_latest_nodes[i];
+        if (node->valid && node->dirty) {
+            dongle_print_latest_node(node, now_us);
+        }
+    }
+}
+#endif
+
 static void espnow_rx_task(void *arg)
 {
     (void)arg;
 
-    uint32_t packet_count = 0;
+#if DONGLE_ENABLE_SERIAL_OUTPUT
+    const TickType_t print_period_ticks = pdMS_TO_TICKS(DONGLE_SERIAL_STATE_PERIOD_MS);
+    TickType_t last_print_tick = xTaskGetTickCount();
+#endif
 
     ESP_LOGI(TAG, "dongle waiting for ESP-NOW tracker packets");
 
     while (1) {
         m2p_espnow_rx_packet_t rx_packet = {0};
-        if (!m2p_espnow_receive(&rx_packet, 1000)) {
-            continue;
-        }
-
-        packet_count++;
 
 #if DONGLE_ENABLE_SERIAL_OUTPUT
-        if ((packet_count % ESPNOW_RX_PRINT_DECIMATION) == 0) {
-            const m2p_espnow_tracker_packet_t *packet = &rx_packet.packet;
-            printf("rx,node=%u,seq=%" PRIu32 ",src=%02X:%02X:%02X:%02X:%02X:%02X,"
-                   "ax=%.6f,ay=%.6f,az=%.6f,gx=%.6f,gy=%.6f,gz=%.6f\n",
-                   packet->node_id,
-                   packet->sequence,
-                   rx_packet.src_addr[0],
-                   rx_packet.src_addr[1],
-                   rx_packet.src_addr[2],
-                   rx_packet.src_addr[3],
-                   rx_packet.src_addr[4],
-                   rx_packet.src_addr[5],
-                   (double)packet->accel_g[0],
-                   (double)packet->accel_g[1],
-                   (double)packet->accel_g[2],
-                   (double)packet->gyro_dps[0],
-                   (double)packet->gyro_dps[1],
-                   (double)packet->gyro_dps[2]);
+        uint32_t wait_ms = 0;
+        TickType_t now_tick = xTaskGetTickCount();
+        const TickType_t elapsed_ticks = now_tick - last_print_tick;
+        if (elapsed_ticks < print_period_ticks) {
+            TickType_t remaining_ticks = print_period_ticks - elapsed_ticks;
+            wait_ms = (uint32_t)(remaining_ticks * portTICK_PERIOD_MS);
+            if (wait_ms == 0) {
+                wait_ms = 1;
+            }
+        }
+#else
+        const uint32_t wait_ms = 1000;
+#endif
+
+        if (m2p_espnow_receive(&rx_packet, wait_ms)) {
+#if DONGLE_ENABLE_SERIAL_OUTPUT
+            dongle_store_latest_packet(&rx_packet);
+#endif
+        }
+
+#if DONGLE_ENABLE_SERIAL_OUTPUT
+        now_tick = xTaskGetTickCount();
+        if ((now_tick - last_print_tick) >= print_period_ticks) {
+            dongle_print_latest_states();
+            last_print_tick += print_period_ticks;
+            if ((now_tick - last_print_tick) >= print_period_ticks) {
+                last_print_tick = now_tick;
+            }
         }
 #endif
     }
@@ -277,6 +368,9 @@ static void start_dongle_mode(void)
     ESP_LOGI(TAG, "role: receive tracker data");
     ESP_LOGI(TAG, "esp-now channel=%d", M2P_ESPNOW_CHANNEL);
     ESP_LOGI(TAG, "serial output=%d", DONGLE_ENABLE_SERIAL_OUTPUT);
+#if DONGLE_ENABLE_SERIAL_OUTPUT
+    ESP_LOGI(TAG, "serial latest-state rate=%d Hz", DONGLE_SERIAL_STATE_RATE_HZ);
+#endif
     ESP_LOGI(TAG, "usb keyboard=%d", DONGLE_ENABLE_USB_KEYBOARD);
 
     led_set(true);
