@@ -3,6 +3,7 @@
 MoveToPlay Phase-5 minimal closed-loop verifier:
 - chest(node=1) + hand(node=2)
 - independent 6-axis fusion per node (Mahony, no mag)
+- gyro bias calibration while both trackers are kept still
 - T-pose calibration (windowed quaternion average)
 - relative hand-to-chest pose output
 - terminal status + matplotlib relative Euler curves
@@ -32,6 +33,9 @@ import serial
 
 
 KEY_VALUE_RE = re.compile(r"([A-Za-z_]+)\s*=\s*([^,\s]+)")
+UINT32_US_MODULO = 1 << 32
+MIN_FUSION_DT_S = 0.001
+MAX_FUSION_DT_S = 0.100
 
 
 def quat_normalize(q: np.ndarray) -> np.ndarray:
@@ -99,6 +103,10 @@ class Mahony6DoF:
         self.q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
         self.integral = np.zeros(3, dtype=float)
 
+    def reset(self) -> None:
+        self.q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+        self.integral = np.zeros(3, dtype=float)
+
     def update(self, gyro_dps: np.ndarray, accel_g: np.ndarray, dt: float) -> np.ndarray:
         if dt <= 0.0:
             return self.q.copy()
@@ -138,6 +146,7 @@ class Packet:
     gz: float
     arrival_time: float
     timestamp_us: Optional[int] = None
+    dongle_rx_us: Optional[int] = None
 
 
 def parse_packet(line: str, arrival_time: float) -> Optional[Packet]:
@@ -161,6 +170,7 @@ def parse_packet(line: str, arrival_time: float) -> Optional[Packet]:
             gz=float(kv["gz"]),
             arrival_time=arrival_time,
             timestamp_us=int(kv["timestamp_us"]) if "timestamp_us" in kv else None,
+            dongle_rx_us=int(kv["dongle_rx_us"]) if "dongle_rx_us" in kv else None,
         )
         return packet
     except ValueError:
@@ -185,6 +195,11 @@ class SensorState:
     last_seq: Optional[int] = None
     last_update_time: Optional[float] = None
     last_timestamp_us: Optional[int] = None
+    last_unwrapped_timestamp_us: Optional[int] = None
+    last_dongle_rx_us: Optional[int] = None
+    last_dongle_time_s: Optional[float] = None
+    last_dt_s: float = 0.0
+    last_dt_source: str = "default"
     link_ok: bool = False
     accel_norm: float = 1.0
     bad_accel_count: int = 0
@@ -193,6 +208,18 @@ class SensorState:
     last_warned_seq_backwards_count: int = 0
     latest_raw: Optional[Packet] = None
 
+    def reset_attitude(self) -> None:
+        self.fusion.reset()
+        self.q_live = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+        self.q_tpose = None
+        self.q_corr = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+        self.last_timestamp_us = None
+        self.last_unwrapped_timestamp_us = None
+        self.last_dongle_rx_us = None
+        self.last_dongle_time_s = None
+        self.last_dt_s = 0.0
+        self.last_dt_source = "default"
+
     def _compute_dt(
         self,
         packet: Packet,
@@ -200,16 +227,38 @@ class SensorState:
         use_arrival_dt: bool,
     ) -> float:
         dt = default_dt
-        if packet.timestamp_us is not None and self.last_timestamp_us is not None:
-            dt_sensor = (packet.timestamp_us - self.last_timestamp_us) * 1e-6
-            if 1e-4 <= dt_sensor <= 0.1:
-                dt = dt_sensor
-        elif use_arrival_dt and self.last_update_time is not None:
+        source = "default"
+
+        if packet.timestamp_us is not None:
+            timestamp_us = packet.timestamp_us & 0xFFFFFFFF
+            if self.last_timestamp_us is not None and self.last_unwrapped_timestamp_us is not None:
+                delta_us = timestamp_us - self.last_timestamp_us
+                if delta_us < 0:
+                    delta_us += UINT32_US_MODULO
+                dt_sensor = delta_us * 1e-6
+                self.last_unwrapped_timestamp_us += delta_us
+                if MIN_FUSION_DT_S <= dt_sensor <= MAX_FUSION_DT_S:
+                    dt = dt_sensor
+                    source = "tracker_ts"
+            else:
+                self.last_unwrapped_timestamp_us = timestamp_us
+            self.last_timestamp_us = timestamp_us
+
+        if source == "default" and packet.dongle_rx_us is not None and self.last_dongle_rx_us is not None:
+            dt_dongle = (packet.dongle_rx_us - self.last_dongle_rx_us) * 1e-6
+            if MIN_FUSION_DT_S <= dt_dongle <= MAX_FUSION_DT_S:
+                dt = dt_dongle
+                source = "dongle_rx"
+
+        if source == "default" and use_arrival_dt and self.last_update_time is not None:
             dt_arrive = packet.arrival_time - self.last_update_time
-            if 1e-4 <= dt_arrive <= 0.1:
+            if MIN_FUSION_DT_S <= dt_arrive <= MAX_FUSION_DT_S:
                 dt = dt_arrive
-        dt = max(0.001, min(0.05, dt))
-        self.last_timestamp_us = packet.timestamp_us
+                source = "pc_arrival"
+
+        dt = max(MIN_FUSION_DT_S, min(MAX_FUSION_DT_S, dt))
+        self.last_dt_s = dt
+        self.last_dt_source = source
         return dt
 
     def update_from_packet(self, packet: Packet, default_dt: float, use_arrival_dt: bool) -> bool:
@@ -233,8 +282,68 @@ class SensorState:
 
         self.last_seq = packet.seq
         self.last_update_time = packet.arrival_time
+        self.last_dongle_rx_us = packet.dongle_rx_us
+        self.last_dongle_time_s = packet.dongle_rx_us * 1e-6 if packet.dongle_rx_us is not None else None
         self.latest_raw = packet
         self.link_ok = True
+        return True
+
+
+class GyroBiasCalibrationManager:
+    def __init__(self, window_s: float = 3.0, min_samples: int = 20) -> None:
+        self.window_s = window_s
+        self.min_samples = min_samples
+        self.active = False
+        self.start_time: Optional[float] = None
+        self.samples = {"chest": [], "hand": []}
+        self.last_sampled_seq = {"chest": None, "hand": None}
+        self.last_error: Optional[str] = None
+        self.last_result: dict[str, np.ndarray] = {}
+
+    def start(self, now: float) -> None:
+        self.active = True
+        self.start_time = now
+        self.samples = {"chest": [], "hand": []}
+        self.last_sampled_seq = {"chest": None, "hand": None}
+        self.last_error = None
+        self.last_result = {}
+
+    def add_sample(self, sensor: SensorState, packet: Packet) -> None:
+        if not self.active:
+            return
+        if self.last_sampled_seq[sensor.name] == packet.seq:
+            return
+        self.samples[sensor.name].append(np.array([packet.gx, packet.gy, packet.gz], dtype=float))
+        self.last_sampled_seq[sensor.name] = packet.seq
+
+    def should_finish(self, now: float) -> bool:
+        if not self.active or self.start_time is None:
+            return False
+        return (now - self.start_time) >= self.window_s
+
+    def finish(self, sensors: dict[int, SensorState]) -> bool:
+        if (
+            len(self.samples["chest"]) < self.min_samples
+            or len(self.samples["hand"]) < self.min_samples
+        ):
+            self.active = False
+            self.last_error = (
+                "Not enough still samples: "
+                f"chest={len(self.samples['chest'])}, hand={len(self.samples['hand'])}, "
+                f"min={self.min_samples}"
+            )
+            return False
+
+        result = {}
+        for sensor in sensors.values():
+            bias = np.mean(np.array(self.samples[sensor.name], dtype=float), axis=0)
+            sensor.gyro_bias = bias
+            sensor.reset_attitude()
+            result[sensor.name] = bias
+
+        self.active = False
+        self.last_result = result
+        self.last_error = None
         return True
 
 
@@ -316,7 +425,10 @@ class RelativePoseComputer:
         if (now - chest.last_update_time) > link_timeout_s or (now - hand.last_update_time) > link_timeout_s:
             return None, None, "link_stale"
 
-        pair_dt = abs(chest.last_update_time - hand.last_update_time)
+        if chest.last_dongle_time_s is not None and hand.last_dongle_time_s is not None:
+            pair_dt = abs(chest.last_dongle_time_s - hand.last_dongle_time_s)
+        else:
+            pair_dt = abs(chest.last_update_time - hand.last_update_time)
         if pair_dt > self.max_pair_dt_s:
             return None, None, f"unsynced({pair_dt*1000.0:.1f}ms)"
 
@@ -455,6 +567,8 @@ class DualNodeSession:
         link_timeout_s: float,
         pair_threshold_s: float,
         calib_window_s: float,
+        gyro_bias_window_s: float,
+        gyro_bias_min_samples: int,
     ) -> None:
         self.sensors = {
             1: SensorState(node_id=1, name="chest", fusion=Mahony6DoF(kp=mahony_kp, ki=mahony_ki)),
@@ -463,6 +577,10 @@ class DualNodeSession:
         self.default_dt = default_dt
         self.use_arrival_dt = use_arrival_dt
         self.link_timeout_s = link_timeout_s
+        self.gyro_bias_calib = GyroBiasCalibrationManager(
+            window_s=gyro_bias_window_s,
+            min_samples=gyro_bias_min_samples,
+        )
         self.calib = CalibrationManager(window_s=calib_window_s)
         self.rel = RelativePoseComputer(max_pair_dt_s=pair_threshold_s)
         self.rel_last_status = "not_calibrated"
@@ -472,8 +590,16 @@ class DualNodeSession:
         if sensor is None:
             return
         updated = sensor.update_from_packet(packet, default_dt=self.default_dt, use_arrival_dt=self.use_arrival_dt)
+        if updated and self.gyro_bias_calib.active:
+            self.gyro_bias_calib.add_sample(sensor, packet)
         if updated and self.calib.state == CalibrationState.CALIBRATING:
             self.calib.add_sample(sensor)
+
+    def start_gyro_bias_calibration(self, now: float) -> None:
+        self.gyro_bias_calib.start(now)
+
+    def finish_gyro_bias_calibration(self) -> bool:
+        return self.gyro_bias_calib.finish(self.sensors)
 
     def start_calibration(self, now: float) -> None:
         self.calib.start(now)
@@ -513,6 +639,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--link-timeout-ms", type=float, default=300.0)
     p.add_argument("--pair-threshold-ms", type=float, default=40.0)
     p.add_argument("--calib-window-s", type=float, default=2.5)
+    p.add_argument("--gyro-bias-window-s", type=float, default=3.0)
+    p.add_argument("--gyro-bias-min-samples", type=int, default=20)
+    p.add_argument("--auto-gyro-bias", action="store_true", help="Start gyro-bias calibration after opening serial")
+    p.add_argument("--exit-after-gyro-bias", action="store_true", help="Exit after auto gyro-bias calibration finishes")
     p.add_argument("--plot-window-s", type=float, default=10.0)
     return p
 
@@ -526,6 +656,7 @@ def format_sensor_brief(sensor: SensorState) -> str:
         f"{sensor.name}:seq={sensor.last_seq:<7d} "
         f"euler=({roll:>6.1f},{pitch:>6.1f},{yaw:>6.1f}) "
         f"acc={sensor.accel_norm:>4.2f}g "
+        f"dt={sensor.last_dt_s*1000.0:>5.1f}ms/{sensor.last_dt_source} "
         f"link={link_label}"
     )
 
@@ -544,6 +675,8 @@ def main() -> int:
         link_timeout_s=link_timeout_s,
         pair_threshold_s=pair_threshold_s,
         calib_window_s=args.calib_window_s,
+        gyro_bias_window_s=args.gyro_bias_window_s,
+        gyro_bias_min_samples=args.gyro_bias_min_samples,
     )
     plotter = RelativePlotter(window_s=args.plot_window_s, dt_hint=args.dt)
 
@@ -555,11 +688,16 @@ def main() -> int:
         return 1
 
     print("[info] phase-5 minimal closed-loop started")
-    print("[info] press 'c' to start T-pose calibration, 'q' to quit")
+    print("[info] press 'b' for gyro-bias calibration, 'c' for T-pose calibration, 'q' to quit")
     print("[info] key input works in terminal and in the matplotlib figure window")
     print("[info] roll/pitch are relatively trustworthy; yaw drifts without magnetometer")
 
     start_t = time.monotonic()
+    if args.auto_gyro_bias:
+        session.start_gyro_bias_calibration(start_t)
+        print("[gyro-bias] started: keep both trackers still for "
+              f"{session.gyro_bias_calib.window_s:.1f}s")
+
     last_print_t = 0.0
     last_warn_t = 0.0
 
@@ -568,6 +706,7 @@ def main() -> int:
             while True:
                 now = time.monotonic()
                 prev_calib_state = session.calib.state
+                prev_gyro_bias_active = session.gyro_bias_calib.active
                 raw = ser.readline().decode("utf-8", errors="ignore").strip()
                 if raw:
                     pkt = parse_packet(raw, arrival_time=now)
@@ -583,10 +722,33 @@ def main() -> int:
                     key = key.lower()
                     if key == "q":
                         break
+                    if key == "b":
+                        session.start_gyro_bias_calibration(now)
+                        print("\n[gyro-bias] started: keep both trackers still for "
+                              f"{session.gyro_bias_calib.window_s:.1f}s")
                     if key == "c":
                         session.start_calibration(now)
                         print("\n[calib] started: hold T-pose for "
                               f"{session.calib.window_s:.1f}s (collecting chest+hand)")
+
+                if session.gyro_bias_calib.should_finish(now):
+                    if session.finish_gyro_bias_calibration():
+                        chest_bias = session.gyro_bias_calib.last_result["chest"]
+                        hand_bias = session.gyro_bias_calib.last_result["hand"]
+                        print(
+                            "\n[gyro-bias] success: "
+                            f"chest=({chest_bias[0]:.4f},{chest_bias[1]:.4f},{chest_bias[2]:.4f}) dps, "
+                            f"hand=({hand_bias[0]:.4f},{hand_bias[1]:.4f},{hand_bias[2]:.4f}) dps"
+                        )
+                        print("[gyro-bias] attitude reset; press 'c' for T-pose calibration next")
+                        if args.exit_after_gyro_bias:
+                            break
+                    elif session.gyro_bias_calib.last_error:
+                        print(f"\n[gyro-bias] failed: {session.gyro_bias_calib.last_error}")
+                        if args.exit_after_gyro_bias:
+                            break
+                elif prev_gyro_bias_active and not session.gyro_bias_calib.active and session.gyro_bias_calib.last_error:
+                    print(f"\n[gyro-bias] failed: {session.gyro_bias_calib.last_error}")
 
                 if prev_calib_state == CalibrationState.CALIBRATING and session.calib.state != CalibrationState.CALIBRATING:
                     if session.calib.state == CalibrationState.CALIBRATED:
@@ -625,7 +787,7 @@ def main() -> int:
 
                 if now - last_print_t > 0.1:
                     last_print_t = now
-                    state = session.calib.state.value
+                    state = "GYRO_BIAS" if session.gyro_bias_calib.active else session.calib.state.value
                     rel_text = "rel: n/a"
                     if rel_euler is not None:
                         rr, rp, ry = rel_euler

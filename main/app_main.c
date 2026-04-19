@@ -31,8 +31,8 @@ static const char *TAG = "imu_main";
  *   0 = serial output only. This is the current debug/default dongle behavior.
  *   1 = enable TinyUSB HID keyboard support for later game-control tests.
  */
-//#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_TRACKER
-#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_DONGLE
+#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_TRACKER
+//#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_DONGLE
 
 #define MOVE_TO_PLAY_ENABLE_ESPNOW        1
 #define MOVE_TO_PLAY_ESPNOW_SEND_SAMPLES  1
@@ -41,8 +41,8 @@ static const char *TAG = "imu_main";
 #define DONGLE_ENABLE_USB_KEYBOARD        0
 #define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
 
-//#define BOARD_NODE_ID                 1 //chest
-#define BOARD_NODE_ID                 2 //right arm
+#define BOARD_NODE_ID                 1 //chest
+//#define BOARD_NODE_ID                 2 //right arm
 
 #define IMU_SPI_HOST                  SPI2_HOST
 #define IMU_SPI_SCLK_GPIO             GPIO_NUM_12
@@ -247,11 +247,13 @@ static void dongle_print_latest_node(dongle_latest_node_t *node, int64_t now_us)
     const uint32_t age_ms = (uint32_t)((now_us - node->last_rx_us) / 1000);
 
     printf("rx,node=%u,seq=%" PRIu32 ",timestamp_us=%" PRIu32
+           ",dongle_rx_us=%" PRId64
            ",src=%02X:%02X:%02X:%02X:%02X:%02X,age_ms=%" PRIu32
            ",ax=%.6f,ay=%.6f,az=%.6f,gx=%.6f,gy=%.6f,gz=%.6f\n",
            packet->node_id,
            packet->sequence,
            packet->timestamp_us,
+           node->last_rx_us,
            node->src_addr[0],
            node->src_addr[1],
            node->src_addr[2],
