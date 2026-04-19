@@ -31,8 +31,8 @@ static const char *TAG = "imu_main";
  *   0 = serial output only. This is the current debug/default dongle behavior.
  *   1 = enable TinyUSB HID keyboard support for later game-control tests.
  */
-#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_TRACKER
-//#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_DONGLE
+//#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_TRACKER
+#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_DONGLE
 
 #define MOVE_TO_PLAY_ENABLE_ESPNOW        1
 #define MOVE_TO_PLAY_ESPNOW_SEND_SAMPLES  1
