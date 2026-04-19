@@ -43,6 +43,22 @@ IMU_LINE_RE = re.compile(
     r"gy=(?P<gy>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?),"
     r"gz=(?P<gz>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)"
 )
+ACC_FULL_TRUST_DEV_G = 0.10
+ACC_ZERO_TRUST_DEV_G = 0.45
+
+
+def accel_correction_weight(acc_norm: float) -> float:
+    if not math.isfinite(acc_norm) or acc_norm <= 1e-6:
+        return 0.0
+
+    deviation = abs(acc_norm - 1.0)
+    if deviation <= ACC_FULL_TRUST_DEV_G:
+        return 1.0
+    if deviation >= ACC_ZERO_TRUST_DEV_G:
+        return 0.0
+
+    span = ACC_ZERO_TRUST_DEV_G - ACC_FULL_TRUST_DEV_G
+    return (ACC_ZERO_TRUST_DEV_G - deviation) / span
 
 
 @dataclass
@@ -66,15 +82,18 @@ class Mahony6DoF:
         self.ki = ki
         self.q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
         self.integral = np.zeros(3, dtype=float)
+        self.last_accel_weight = 0.0
 
     def update(self, gyro_dps: np.ndarray, accel_g: np.ndarray, dt: float) -> np.ndarray:
         if dt <= 0.0:
             return self.q.copy()
 
         acc_norm = np.linalg.norm(accel_g)
+        acc_weight = accel_correction_weight(float(acc_norm))
+        self.last_accel_weight = acc_weight
         gyro = np.radians(gyro_dps.astype(float))
 
-        if 0.5 < acc_norm < 2.0:
+        if acc_weight > 0.0:
             a = accel_g / acc_norm
             q0, q1, q2, q3 = self.q
 
@@ -89,8 +108,9 @@ class Mahony6DoF:
             )
 
             error = np.cross(v, a)
-            self.integral += self.ki * error * dt
-            gyro = gyro + self.kp * error + self.integral
+            weighted_error = error * acc_weight
+            self.integral += self.ki * weighted_error * dt
+            gyro = gyro + self.kp * weighted_error + self.integral
 
         q_dot = 0.5 * quat_multiply(self.q, np.array([0.0, gyro[0], gyro[1], gyro[2]]))
         self.q = self.q + q_dot * dt
@@ -417,7 +437,8 @@ def main() -> int:
                     f"\rseq={sample.seq:<8d} "
                     f"roll={roll:>7.2f} pitch={pitch:>7.2f} yaw={yaw:>7.2f} "
                     f"motion={motion_label:<6s} "
-                    f"acc_norm={accel_norm:>5.2f}g",
+                    f"acc_norm={accel_norm:>5.2f}g "
+                    f"aw={fusion.last_accel_weight:.2f}",
                     end="",
                     flush=True,
                 )

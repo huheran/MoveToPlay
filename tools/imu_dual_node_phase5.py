@@ -36,6 +36,22 @@ KEY_VALUE_RE = re.compile(r"([A-Za-z_]+)\s*=\s*([^,\s]+)")
 UINT32_US_MODULO = 1 << 32
 MIN_FUSION_DT_S = 0.001
 MAX_FUSION_DT_S = 0.100
+ACC_FULL_TRUST_DEV_G = 0.10
+ACC_ZERO_TRUST_DEV_G = 0.45
+
+
+def accel_correction_weight(acc_norm: float) -> float:
+    if not math.isfinite(acc_norm) or acc_norm <= 1e-6:
+        return 0.0
+
+    deviation = abs(acc_norm - 1.0)
+    if deviation <= ACC_FULL_TRUST_DEV_G:
+        return 1.0
+    if deviation >= ACC_ZERO_TRUST_DEV_G:
+        return 0.0
+
+    span = ACC_ZERO_TRUST_DEV_G - ACC_FULL_TRUST_DEV_G
+    return (ACC_ZERO_TRUST_DEV_G - deviation) / span
 
 
 def quat_normalize(q: np.ndarray) -> np.ndarray:
@@ -102,19 +118,23 @@ class Mahony6DoF:
         self.ki = ki
         self.q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
         self.integral = np.zeros(3, dtype=float)
+        self.last_accel_weight = 0.0
 
     def reset(self) -> None:
         self.q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
         self.integral = np.zeros(3, dtype=float)
+        self.last_accel_weight = 0.0
 
     def update(self, gyro_dps: np.ndarray, accel_g: np.ndarray, dt: float) -> np.ndarray:
         if dt <= 0.0:
             return self.q.copy()
 
         acc_norm = float(np.linalg.norm(accel_g))
+        acc_weight = accel_correction_weight(acc_norm)
+        self.last_accel_weight = acc_weight
         gyro = np.radians(gyro_dps.astype(float))
 
-        if 0.5 < acc_norm < 2.0:
+        if acc_weight > 0.0:
             a = accel_g / acc_norm
             q0, q1, q2, q3 = self.q
             v = np.array(
@@ -126,8 +146,9 @@ class Mahony6DoF:
                 dtype=float,
             )
             err = np.cross(v, a)
-            self.integral += self.ki * err * dt
-            gyro = gyro + self.kp * err + self.integral
+            weighted_err = err * acc_weight
+            self.integral += self.ki * weighted_err * dt
+            gyro = gyro + self.kp * weighted_err + self.integral
 
         q_dot = 0.5 * quat_multiply(self.q, np.array([0.0, gyro[0], gyro[1], gyro[2]]))
         self.q = quat_normalize(self.q + q_dot * dt)
@@ -202,6 +223,7 @@ class SensorState:
     last_dt_source: str = "default"
     link_ok: bool = False
     accel_norm: float = 1.0
+    accel_weight: float = 0.0
     bad_accel_count: int = 0
     seq_backwards_count: int = 0
     last_warned_bad_accel_count: int = 0
@@ -275,6 +297,7 @@ class SensorState:
             self.bad_accel_count += 1
 
         self.q_live = self.fusion.update(gyro_dps=gyro, accel_g=accel, dt=dt)
+        self.accel_weight = self.fusion.last_accel_weight
         if self.q_tpose is not None:
             self.q_corr = quat_normalize(quat_multiply(quat_inverse(self.q_tpose), self.q_live))
         else:
@@ -656,6 +679,7 @@ def format_sensor_brief(sensor: SensorState) -> str:
         f"{sensor.name}:seq={sensor.last_seq:<7d} "
         f"euler=({roll:>6.1f},{pitch:>6.1f},{yaw:>6.1f}) "
         f"acc={sensor.accel_norm:>4.2f}g "
+        f"aw={sensor.accel_weight:.2f} "
         f"dt={sensor.last_dt_s*1000.0:>5.1f}ms/{sensor.last_dt_source} "
         f"link={link_label}"
     )
