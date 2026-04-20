@@ -38,6 +38,7 @@ DEFAULT_LABEL_MAP = {
 
 
 CSV_COLUMNS = [
+    "pc_timestamp_ms",
     "board_timestamp_ms",
     "node_id",
     "ax",
@@ -140,6 +141,7 @@ class CsvSessionWriter:
 
         self._writer.writerow(
             {
+                "pc_timestamp_ms": sample.pc_timestamp_ms,
                 "board_timestamp_ms": "" if sample.board_timestamp_ms is None else sample.board_timestamp_ms,
                 "node_id": sample.node_id,
                 "ax": sample.ax,
