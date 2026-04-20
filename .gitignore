@@ -24,6 +24,7 @@ logs/
 .DS_Store
 Thumbs.db
 data/
+output/
 
 # 编辑器本地配置
 .vscode/
