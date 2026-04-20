@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import math
 import os
-import re
 import sys
 import time
 from collections import deque
@@ -31,9 +30,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import serial
 
-
-KEY_VALUE_RE = re.compile(r"([A-Za-z_]+)\s*=\s*([^,\s]+)")
-UINT32_US_MODULO = 1 << 32
 MIN_FUSION_DT_S = 0.001
 MAX_FUSION_DT_S = 0.100
 ACC_FULL_TRUST_DEV_G = 0.10
@@ -166,34 +162,32 @@ class Packet:
     gy: float
     gz: float
     arrival_time: float
+    board_timestamp_ms: Optional[float] = None
     timestamp_us: Optional[int] = None
-    dongle_rx_us: Optional[int] = None
 
 
 def parse_packet(line: str, arrival_time: float) -> Optional[Packet]:
-    if not line or "=" not in line:
-        return None
-    kv = dict(KEY_VALUE_RE.findall(line))
-    required = ("node", "seq", "ax", "ay", "az", "gx", "gy", "gz")
-    if not all(k in kv for k in required):
+    if not line:
         return None
     try:
-        node_id = int(kv["node"])
-        seq = int(kv["seq"])
-        packet = Packet(
-            node_id=node_id,
-            seq=seq,
-            ax=float(kv["ax"]),
-            ay=float(kv["ay"]),
-            az=float(kv["az"]),
-            gx=float(kv["gx"]),
-            gy=float(kv["gy"]),
-            gz=float(kv["gz"]),
+        parts = [part.strip() for part in line.strip().split(",")]
+        if len(parts) != 8:
+            return None
+
+        board_timestamp_ms = float(parts[0]) if parts[0] else None
+        return Packet(
+            node_id=int(parts[1]),
+            seq=int(round(board_timestamp_ms)) if board_timestamp_ms is not None else 0,
+            ax=float(parts[2]),
+            ay=float(parts[3]),
+            az=float(parts[4]),
+            gx=float(parts[5]),
+            gy=float(parts[6]),
+            gz=float(parts[7]),
             arrival_time=arrival_time,
-            timestamp_us=int(kv["timestamp_us"]) if "timestamp_us" in kv else None,
-            dongle_rx_us=int(kv["dongle_rx_us"]) if "dongle_rx_us" in kv else None,
+            board_timestamp_ms=board_timestamp_ms,
+            timestamp_us=int(round(board_timestamp_ms * 1000.0)) if board_timestamp_ms is not None else None,
         )
-        return packet
     except ValueError:
         return None
 
@@ -216,9 +210,6 @@ class SensorState:
     last_seq: Optional[int] = None
     last_update_time: Optional[float] = None
     last_timestamp_us: Optional[int] = None
-    last_unwrapped_timestamp_us: Optional[int] = None
-    last_dongle_rx_us: Optional[int] = None
-    last_dongle_time_s: Optional[float] = None
     last_dt_s: float = 0.0
     last_dt_source: str = "default"
     link_ok: bool = False
@@ -236,9 +227,6 @@ class SensorState:
         self.q_tpose = None
         self.q_corr = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
         self.last_timestamp_us = None
-        self.last_unwrapped_timestamp_us = None
-        self.last_dongle_rx_us = None
-        self.last_dongle_time_s = None
         self.last_dt_s = 0.0
         self.last_dt_source = "default"
 
@@ -252,25 +240,13 @@ class SensorState:
         source = "default"
 
         if packet.timestamp_us is not None:
-            timestamp_us = packet.timestamp_us & 0xFFFFFFFF
-            if self.last_timestamp_us is not None and self.last_unwrapped_timestamp_us is not None:
-                delta_us = timestamp_us - self.last_timestamp_us
-                if delta_us < 0:
-                    delta_us += UINT32_US_MODULO
-                dt_sensor = delta_us * 1e-6
-                self.last_unwrapped_timestamp_us += delta_us
+            timestamp_us = packet.timestamp_us
+            if self.last_timestamp_us is not None:
+                dt_sensor = (timestamp_us - self.last_timestamp_us) * 1e-6
                 if MIN_FUSION_DT_S <= dt_sensor <= MAX_FUSION_DT_S:
                     dt = dt_sensor
-                    source = "tracker_ts"
-            else:
-                self.last_unwrapped_timestamp_us = timestamp_us
+                    source = "board_ts"
             self.last_timestamp_us = timestamp_us
-
-        if source == "default" and packet.dongle_rx_us is not None and self.last_dongle_rx_us is not None:
-            dt_dongle = (packet.dongle_rx_us - self.last_dongle_rx_us) * 1e-6
-            if MIN_FUSION_DT_S <= dt_dongle <= MAX_FUSION_DT_S:
-                dt = dt_dongle
-                source = "dongle_rx"
 
         if source == "default" and use_arrival_dt and self.last_update_time is not None:
             dt_arrive = packet.arrival_time - self.last_update_time
@@ -284,7 +260,7 @@ class SensorState:
         return dt
 
     def update_from_packet(self, packet: Packet, default_dt: float, use_arrival_dt: bool) -> bool:
-        if self.last_seq is not None and packet.seq <= self.last_seq:
+        if self.last_seq is not None and packet.seq > 0 and packet.seq <= self.last_seq:
             self.seq_backwards_count += 1
             return False
 
@@ -305,8 +281,6 @@ class SensorState:
 
         self.last_seq = packet.seq
         self.last_update_time = packet.arrival_time
-        self.last_dongle_rx_us = packet.dongle_rx_us
-        self.last_dongle_time_s = packet.dongle_rx_us * 1e-6 if packet.dongle_rx_us is not None else None
         self.latest_raw = packet
         self.link_ok = True
         return True
@@ -334,10 +308,11 @@ class GyroBiasCalibrationManager:
     def add_sample(self, sensor: SensorState, packet: Packet) -> None:
         if not self.active:
             return
-        if self.last_sampled_seq[sensor.name] == packet.seq:
+        packet_key = packet.seq if packet.seq > 0 else int(round(packet.arrival_time * 1000.0))
+        if self.last_sampled_seq[sensor.name] == packet_key:
             return
         self.samples[sensor.name].append(np.array([packet.gx, packet.gy, packet.gz], dtype=float))
-        self.last_sampled_seq[sensor.name] = packet.seq
+        self.last_sampled_seq[sensor.name] = packet_key
 
     def should_finish(self, now: float) -> bool:
         if not self.active or self.start_time is None:

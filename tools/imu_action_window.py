@@ -23,7 +23,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import serial
 
-from imu_dual_node_phase5 import NonBlockingKeyReader, Packet, parse_packet
+from tools.imu_dual_node import NonBlockingKeyReader, Packet, parse_packet
 
 
 NODE_CHEST = 1
