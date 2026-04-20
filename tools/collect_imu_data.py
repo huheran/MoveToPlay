@@ -34,6 +34,7 @@ DEFAULT_LABEL_MAP = {
     "3": "raise",
     "4": "move_noise",
     "5": "transition",
+    "6": "jump",
 }
 
 
@@ -355,7 +356,7 @@ class CollectorApp:
         print("Raw serial acquisition with keyboard labeling")
 
     def _print_help(self) -> None:
-        print("[keys] 1=idle 2=attack 3=raise 4=move_noise 5=transition")
+        print("[keys] 1=idle 2=attack 3=raise 4=move_noise 5=transition 6=jump")
         print("[keys] s=start/pause  c=new session  p=print status  q=save and quit")
 
     def _print_final_summary(self) -> None:
