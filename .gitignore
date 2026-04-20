@@ -23,6 +23,7 @@ __pycache__/
 logs/
 .DS_Store
 Thumbs.db
+data/
 
 # 编辑器本地配置
 .vscode/
