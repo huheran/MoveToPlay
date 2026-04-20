@@ -244,23 +244,15 @@ static void dongle_store_latest_packet(const m2p_espnow_rx_packet_t *rx_packet)
 static void dongle_print_latest_node(dongle_latest_node_t *node, int64_t now_us)
 {
     const m2p_espnow_tracker_packet_t *packet = &node->packet;
-    const uint32_t age_ms = (uint32_t)((now_us - node->last_rx_us) / 1000);
+    (void)node;
+    (void)now_us;
 
-    printf("rx,node=%u,seq=%" PRIu32 ",timestamp_us=%" PRIu32
-           ",dongle_rx_us=%" PRId64
-           ",src=%02X:%02X:%02X:%02X:%02X:%02X,age_ms=%" PRIu32
-           ",ax=%.6f,ay=%.6f,az=%.6f,gx=%.6f,gy=%.6f,gz=%.6f\n",
+    /* Plain CSV for PC-side collection tools:
+     * timestamp_ms,node_id,ax,ay,az,gx,gy,gz
+     */
+    printf("%" PRIu32 ",%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
+           packet->timestamp_us / 1000U,
            packet->node_id,
-           packet->sequence,
-           packet->timestamp_us,
-           node->last_rx_us,
-           node->src_addr[0],
-           node->src_addr[1],
-           node->src_addr[2],
-           node->src_addr[3],
-           node->src_addr[4],
-           node->src_addr[5],
-           age_ms,
            (double)packet->accel_g[0],
            (double)packet->accel_g[1],
            (double)packet->accel_g[2],
