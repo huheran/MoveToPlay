@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import csv
 import math
-import re
 import sys
 import time
 from collections import deque
@@ -33,16 +32,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import serial
 
-
-IMU_LINE_RE = re.compile(
-    r"seq=(?P<seq>\d+).*?"
-    r"ax=(?P<ax>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?),"
-    r"ay=(?P<ay>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?),"
-    r"az=(?P<az>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?),"
-    r"gx=(?P<gx>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?),"
-    r"gy=(?P<gy>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?),"
-    r"gz=(?P<gz>[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)"
-)
 ACC_FULL_TRUST_DEV_G = 0.10
 ACC_ZERO_TRUST_DEV_G = 0.45
 
@@ -64,6 +53,8 @@ def accel_correction_weight(acc_norm: float) -> float:
 @dataclass
 class ImuSample:
     seq: int
+    node_id: int
+    board_timestamp_ms: Optional[float]
     ax: float
     ay: float
     az: float
@@ -151,19 +142,22 @@ def quat_to_euler_deg(q: np.ndarray) -> tuple[float, float, float]:
 
 
 def parse_imu_line(line: str, dt: float, monotonic_time: float) -> Optional[ImuSample]:
-    match = IMU_LINE_RE.search(line)
-    if not match:
-        return None
-
     try:
+        parts = [part.strip() for part in line.strip().split(",")]
+        if len(parts) != 8:
+            return None
+
+        board_timestamp_ms = float(parts[0]) if parts[0] else None
         return ImuSample(
-            seq=int(match.group("seq")),
-            ax=float(match.group("ax")),
-            ay=float(match.group("ay")),
-            az=float(match.group("az")),
-            gx=float(match.group("gx")),
-            gy=float(match.group("gy")),
-            gz=float(match.group("gz")),
+            seq=int(round(board_timestamp_ms)) if board_timestamp_ms is not None else 0,
+            node_id=int(parts[1]),
+            board_timestamp_ms=board_timestamp_ms,
+            ax=float(parts[2]),
+            ay=float(parts[3]),
+            az=float(parts[4]),
+            gx=float(parts[5]),
+            gy=float(parts[6]),
+            gz=float(parts[7]),
             dt=dt,
             monotonic_time=monotonic_time,
         )
@@ -234,6 +228,8 @@ def open_csv_writer(output_dir: Path) -> tuple[csv.writer, object]:
     writer.writerow(
         [
             "pc_time_s",
+            "board_timestamp_ms",
+            "node_id",
             "seq",
             "dt",
             "ax",
@@ -349,6 +345,7 @@ def main() -> int:
         print("[info] roll/pitch are relatively trustworthy; yaw will drift without magnetometer")
 
         prev_pc_time: Optional[float] = None
+        prev_board_timestamp_ms: Optional[float] = None
         prev_euler: Optional[np.ndarray] = None
         processed = 0
         bad_accel_count = 0
@@ -370,6 +367,17 @@ def main() -> int:
             sample = parse_imu_line(raw_line, dt, pc_time)
             if sample is None:
                 continue
+
+            if (
+                not args.use_arrival_dt
+                and sample.board_timestamp_ms is not None
+                and prev_board_timestamp_ms is not None
+            ):
+                board_dt = (sample.board_timestamp_ms - prev_board_timestamp_ms) * 1e-3
+                if 0.001 <= board_dt <= 0.05:
+                    dt = board_dt
+                    sample.dt = dt
+            prev_board_timestamp_ms = sample.board_timestamp_ms
 
             accel = np.array([sample.ax, sample.ay, sample.az], dtype=float)
             gyro = np.array([sample.gx, sample.gy, sample.gz], dtype=float)
@@ -406,6 +414,8 @@ def main() -> int:
             writer.writerow(
                 [
                     f"{pc_time:.6f}",
+                    "" if sample.board_timestamp_ms is None else f"{sample.board_timestamp_ms:.3f}",
+                    sample.node_id,
                     sample.seq,
                     f"{dt:.4f}",
                     f"{sample.ax:.6f}",
@@ -434,7 +444,7 @@ def main() -> int:
             processed += 1
             if processed % 5 == 0:
                 print(
-                    f"\rseq={sample.seq:<8d} "
+                    f"\rnode={sample.node_id:<2d} seq={sample.seq:<8d} "
                     f"roll={roll:>7.2f} pitch={pitch:>7.2f} yaw={yaw:>7.2f} "
                     f"motion={motion_label:<6s} "
                     f"acc_norm={accel_norm:>5.2f}g "
