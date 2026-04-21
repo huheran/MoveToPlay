@@ -30,6 +30,10 @@ static const char *TAG = "imu_main";
  * DONGLE_ENABLE_USB_KEYBOARD:
  *   0 = serial output only. This is the current debug/default dongle behavior.
  *   1 = enable TinyUSB HID keyboard support for later game-control tests.
+ *
+ * DONGLE_ENABLE_USB_MOUSE:
+ *   0 = disable USB mouse report output.
+ *   1 = enable TinyUSB HID mouse support on the same USB HID device.
  */
 //#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_TRACKER
 #define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_DONGLE
@@ -39,7 +43,9 @@ static const char *TAG = "imu_main";
 
 #define DONGLE_ENABLE_SERIAL_OUTPUT       1
 #define DONGLE_ENABLE_USB_KEYBOARD        0
+#define DONGLE_ENABLE_USB_MOUSE           0
 #define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
+#define DONGLE_ENABLE_USB_MOUSE_TEST      0
 
 #define BOARD_NODE_ID                 1 //chest
 //#define BOARD_NODE_ID                 2 //right arm
@@ -67,6 +73,12 @@ static const char *TAG = "imu_main";
 #define USB_KEYBOARD_TEST_READY_TIMEOUT_MS 15000
 #define USB_KEYBOARD_TEST_START_DELAY_MS   8000
 #define USB_KEYBOARD_TEST_HOLD_MS          80
+#define USB_MOUSE_TEST_START_OFFSET_MS     250
+#define USB_MOUSE_TEST_LEFT_DELTA          80
+#define USB_MOUSE_TEST_RIGHT_DELTA         48
+#define USB_MOUSE_TEST_UP_DELTA            48
+#define USB_MOUSE_TEST_DOWN_DELTA          48
+#define USB_MOUSE_TEST_STEP_MS            120
 
 #if (MOVE_TO_PLAY_DEVICE_MODE != MOVE_TO_PLAY_MODE_DONGLE) && \
     (MOVE_TO_PLAY_DEVICE_MODE != MOVE_TO_PLAY_MODE_TRACKER)
@@ -75,6 +87,10 @@ static const char *TAG = "imu_main";
 
 #if DONGLE_ENABLE_USB_KEYBOARD_TEST && !DONGLE_ENABLE_USB_KEYBOARD
 #error "DONGLE_ENABLE_USB_KEYBOARD_TEST requires DONGLE_ENABLE_USB_KEYBOARD"
+#endif
+
+#if DONGLE_ENABLE_USB_MOUSE_TEST && !DONGLE_ENABLE_USB_MOUSE
+#error "DONGLE_ENABLE_USB_MOUSE_TEST requires DONGLE_ENABLE_USB_MOUSE"
 #endif
 
 #if DONGLE_SERIAL_STATE_RATE_HZ <= 0
@@ -356,6 +372,56 @@ static void usb_keyboard_test_task(void *arg)
 }
 #endif
 
+#if DONGLE_ENABLE_USB_MOUSE && DONGLE_ENABLE_USB_MOUSE_TEST
+static void usb_mouse_test_task(void *arg)
+{
+    (void)arg;
+
+    const TickType_t start_tick = xTaskGetTickCount();
+    const TickType_t timeout_ticks = pdMS_TO_TICKS(USB_KEYBOARD_TEST_READY_TIMEOUT_MS);
+
+    while (!usb_mouse_is_ready()) {
+        if ((xTaskGetTickCount() - start_tick) >= timeout_ticks) {
+            ESP_LOGW(TAG, "USB mouse test skipped: device not ready");
+            vTaskDelete(NULL);
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    ESP_LOGI(TAG, "USB mouse ready, test movement will start in %d ms",
+             USB_KEYBOARD_TEST_START_DELAY_MS + USB_MOUSE_TEST_START_OFFSET_MS);
+    vTaskDelay(pdMS_TO_TICKS(USB_KEYBOARD_TEST_START_DELAY_MS + USB_MOUSE_TEST_START_OFFSET_MS));
+
+    esp_err_t err = ESP_OK;
+
+    err = usb_mouse_move(-USB_MOUSE_TEST_LEFT_DELTA, 0, 0, 0);
+    if (err == ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(USB_MOUSE_TEST_STEP_MS));
+        err = usb_mouse_move(USB_MOUSE_TEST_RIGHT_DELTA, 0, 0, 0);
+    }
+    if (err == ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(USB_MOUSE_TEST_STEP_MS));
+        err = usb_mouse_move(0, -USB_MOUSE_TEST_UP_DELTA, 0, 0);
+    }
+    if (err == ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(USB_MOUSE_TEST_STEP_MS));
+        err = usb_mouse_move(0, USB_MOUSE_TEST_DOWN_DELTA, 0, 0);
+    }
+    if (err == ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(USB_MOUSE_TEST_STEP_MS));
+        err = usb_mouse_click(USB_MOUSE_BUTTON_LEFT, USB_KEYBOARD_TEST_HOLD_MS);
+    }
+
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "USB mouse test failed: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "USB mouse test finished");
+    }
+
+    vTaskDelete(NULL);
+}
+#endif
+
 static void start_dongle_mode(void)
 {
     ESP_LOGI(TAG, "Starting dongle mode");
@@ -366,6 +432,7 @@ static void start_dongle_mode(void)
     ESP_LOGI(TAG, "serial latest-state rate=%d Hz", DONGLE_SERIAL_STATE_RATE_HZ);
 #endif
     ESP_LOGI(TAG, "usb keyboard=%d", DONGLE_ENABLE_USB_KEYBOARD);
+    ESP_LOGI(TAG, "usb mouse=%d", DONGLE_ENABLE_USB_MOUSE);
 
     led_set(true);
 
@@ -387,10 +454,10 @@ static void start_dongle_mode(void)
     ESP_LOGI(TAG, "ESP-NOW disabled by MOVE_TO_PLAY_ENABLE_ESPNOW");
 #endif
 
-#if DONGLE_ENABLE_USB_KEYBOARD
+#if DONGLE_ENABLE_USB_KEYBOARD || DONGLE_ENABLE_USB_MOUSE
     esp_err_t usb_err = usb_keyboard_init();
     if (usb_err != ESP_OK) {
-        ESP_LOGW(TAG, "USB keyboard init failed: %s", esp_err_to_name(usb_err));
+        ESP_LOGW(TAG, "USB HID init failed: %s", esp_err_to_name(usb_err));
         return;
     }
 
@@ -403,8 +470,18 @@ static void start_dongle_mode(void)
                             NULL,
                             tskNO_AFFINITY);
 #endif
+
+#if DONGLE_ENABLE_USB_MOUSE_TEST
+    xTaskCreatePinnedToCore(usb_mouse_test_task,
+                            "usb_mouse_test",
+                            3072,
+                            NULL,
+                            5,
+                            NULL,
+                            tskNO_AFFINITY);
+#endif
 #else
-    ESP_LOGI(TAG, "USB keyboard disabled for ESP-NOW serial test");
+    ESP_LOGI(TAG, "USB HID disabled for ESP-NOW serial test");
 #endif
 }
 

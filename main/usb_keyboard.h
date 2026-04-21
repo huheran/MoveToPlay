@@ -33,11 +33,23 @@ typedef enum {
     USB_KEYBOARD_KEY_UP = 0x52,
 } usb_keyboard_key_t;
 
+#define USB_MOUSE_BUTTON_LEFT    0x01
+#define USB_MOUSE_BUTTON_RIGHT   0x02
+#define USB_MOUSE_BUTTON_MIDDLE  0x04
+#define USB_MOUSE_BUTTON_BACK    0x08
+#define USB_MOUSE_BUTTON_FORWARD 0x10
+
 esp_err_t usb_keyboard_init(void);
 bool usb_keyboard_is_ready(void);
 esp_err_t usb_keyboard_press_keys(uint8_t modifier, const uint8_t keycodes[6]);
 esp_err_t usb_keyboard_release(void);
 esp_err_t usb_keyboard_tap_key(uint8_t modifier, uint8_t keycode, uint32_t hold_ms);
+bool usb_mouse_is_ready(void);
+esp_err_t usb_mouse_report(uint8_t buttons, int8_t x, int8_t y, int8_t wheel, int8_t pan);
+esp_err_t usb_mouse_move(int8_t x, int8_t y, int8_t wheel, int8_t pan);
+esp_err_t usb_mouse_set_buttons(uint8_t buttons);
+esp_err_t usb_mouse_release_buttons(void);
+esp_err_t usb_mouse_click(uint8_t buttons, uint32_t hold_ms);
 
 #ifdef __cplusplus
 }
