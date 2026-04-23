@@ -35,6 +35,15 @@ static const char *TAG = "imu_main";
  *   0 = disable USB mouse report output.
  *   1 = enable TinyUSB HID mouse support on the same USB HID device.
  */
+/*
+ * [烧录前先改这里]
+ *
+ * 1) 烧 dongle（接收端）时：
+ *    #define MOVE_TO_PLAY_DEVICE_MODE MOVE_TO_PLAY_MODE_DONGLE
+ *
+ * 2) 烧 tracker（身体节点）时：
+ *    #define MOVE_TO_PLAY_DEVICE_MODE MOVE_TO_PLAY_MODE_TRACKER
+ */
 //#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_TRACKER
 #define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_DONGLE
 
@@ -42,13 +51,37 @@ static const char *TAG = "imu_main";
 #define MOVE_TO_PLAY_ESPNOW_SEND_SAMPLES  1
 
 #define DONGLE_ENABLE_SERIAL_OUTPUT       1
+#define DONGLE_ENABLE_SERIAL_AGE_COLUMN   1
 #define DONGLE_ENABLE_USB_KEYBOARD        0
 #define DONGLE_ENABLE_USB_MOUSE           0
 #define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
 #define DONGLE_ENABLE_USB_MOUSE_TEST      0
 
-#define BOARD_NODE_ID                 1 //chest
-//#define BOARD_NODE_ID                 2 //right arm
+#define TRACKER_NODE_CHEST            1
+#define TRACKER_NODE_RIGHT_HAND       2
+#define TRACKER_NODE_LEFT_HAND        3
+#define TRACKER_NODE_LEG              4
+
+/*
+ * [如果上面选的是 TRACKER，再改这里]
+ *
+ * 给这块 tracker 板子分配身体位置编号。
+ * 每烧一块 tracker，只改下面这一行即可：
+ *
+ *   TRACKER_NODE_CHEST       胸部
+ *   TRACKER_NODE_RIGHT_HAND  右手
+ *   TRACKER_NODE_LEFT_HAND   左手
+ *   TRACKER_NODE_LEG         腿部
+ *
+ * 例子：
+ *   胸部板     -> TRACKER_NODE_CHEST
+ *   右手板     -> TRACKER_NODE_RIGHT_HAND
+ *   左手板     -> TRACKER_NODE_LEFT_HAND
+ *   腿部板     -> TRACKER_NODE_LEG
+ */
+#define MOVE_TO_PLAY_TRACKER_NODE_ID  TRACKER_NODE_LEG 
+
+#define BOARD_NODE_ID                 MOVE_TO_PLAY_TRACKER_NODE_ID
 
 #define IMU_SPI_HOST                  SPI2_HOST
 #define IMU_SPI_SCLK_GPIO             GPIO_NUM_12
@@ -97,8 +130,28 @@ static const char *TAG = "imu_main";
 #error "DONGLE_SERIAL_STATE_RATE_HZ must be greater than 0"
 #endif
 
+#if (MOVE_TO_PLAY_TRACKER_NODE_ID < 1) || (MOVE_TO_PLAY_TRACKER_NODE_ID > DONGLE_MAX_TRACKER_NODES)
+#error "MOVE_TO_PLAY_TRACKER_NODE_ID must be in range 1..DONGLE_MAX_TRACKER_NODES"
+#endif
+
 /* 预留后续按键/串口命令控制，第一版默认开启采样 */
 static bool sampling_enabled = true;
+
+static const char *tracker_node_name(uint8_t node_id)
+{
+    switch (node_id) {
+    case TRACKER_NODE_CHEST:
+        return "chest";
+    case TRACKER_NODE_RIGHT_HAND:
+        return "right_hand";
+    case TRACKER_NODE_LEFT_HAND:
+        return "left_hand";
+    case TRACKER_NODE_LEG:
+        return "leg";
+    default:
+        return "custom";
+    }
+}
 
 static void led_init(void)
 {
@@ -250,6 +303,13 @@ static void dongle_store_latest_packet(const m2p_espnow_rx_packet_t *rx_packet)
         return;
     }
 
+    if (!node->valid) {
+        ESP_LOGI(TAG,
+                 "tracker online: node_id=%u (%s)",
+                 node_id,
+                 tracker_node_name(node_id));
+    }
+
     node->valid = true;
     node->dirty = true;
     node->last_rx_us = esp_timer_get_time();
@@ -260,12 +320,26 @@ static void dongle_store_latest_packet(const m2p_espnow_rx_packet_t *rx_packet)
 static void dongle_print_latest_node(dongle_latest_node_t *node, int64_t now_us)
 {
     const m2p_espnow_tracker_packet_t *packet = &node->packet;
-    (void)node;
-    (void)now_us;
+    double age_ms = 0.0;
+    if (node->last_rx_us > 0 && now_us >= node->last_rx_us) {
+        age_ms = (double)(now_us - node->last_rx_us) / 1000.0;
+    }
 
     /* Plain CSV for PC-side collection tools:
-     * timestamp_ms,node_id,ax,ay,az,gx,gy,gz
+     * timestamp_ms,node_id,ax,ay,az,gx,gy,gz[,age_ms]
      */
+#if DONGLE_ENABLE_SERIAL_AGE_COLUMN
+    printf("%" PRIu32 ",%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.1f\n",
+           packet->timestamp_us / 1000U,
+           packet->node_id,
+           (double)packet->accel_g[0],
+           (double)packet->accel_g[1],
+           (double)packet->accel_g[2],
+           (double)packet->gyro_dps[0],
+           (double)packet->gyro_dps[1],
+           (double)packet->gyro_dps[2],
+           age_ms);
+#else
     printf("%" PRIu32 ",%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
            packet->timestamp_us / 1000U,
            packet->node_id,
@@ -275,6 +349,7 @@ static void dongle_print_latest_node(dongle_latest_node_t *node, int64_t now_us)
            (double)packet->gyro_dps[0],
            (double)packet->gyro_dps[1],
            (double)packet->gyro_dps[2]);
+#endif
 
     node->dirty = false;
 }
@@ -430,6 +505,7 @@ static void start_dongle_mode(void)
     ESP_LOGI(TAG, "serial output=%d", DONGLE_ENABLE_SERIAL_OUTPUT);
 #if DONGLE_ENABLE_SERIAL_OUTPUT
     ESP_LOGI(TAG, "serial latest-state rate=%d Hz", DONGLE_SERIAL_STATE_RATE_HZ);
+    ESP_LOGI(TAG, "serial age column=%d", DONGLE_ENABLE_SERIAL_AGE_COLUMN);
 #endif
     ESP_LOGI(TAG, "usb keyboard=%d", DONGLE_ENABLE_USB_KEYBOARD);
     ESP_LOGI(TAG, "usb mouse=%d", DONGLE_ENABLE_USB_MOUSE);
@@ -490,6 +566,7 @@ static void start_tracker_mode(void)
     ESP_LOGI(TAG, "Starting tracker mode");
     ESP_LOGI(TAG, "role: read IMU and send tracker data");
     ESP_LOGI(TAG, "node_id=%d", BOARD_NODE_ID);
+    ESP_LOGI(TAG, "node_name=%s", tracker_node_name(BOARD_NODE_ID));
     ESP_LOGI(TAG, "SPI pins: SCLK=%d MOSI=%d MISO=%d CS=%d",
              IMU_SPI_SCLK_GPIO,
              IMU_SPI_MOSI_GPIO,
