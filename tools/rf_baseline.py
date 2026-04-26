@@ -48,6 +48,13 @@ except Exception:
 BASE_CHANNELS = ["ax", "ay", "az", "gx", "gy", "gz"]
 NORM_CHANNELS = ["acc_norm", "gyro_norm"]
 ALL_CHANNELS = BASE_CHANNELS + NORM_CHANNELS
+RF_NODE_IDS = [1, 2, 3, 4]
+RF_NODE_NAMES = {
+    1: "chest",
+    2: "right_hand",
+    3: "left_hand",
+    4: "leg",
+}
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -166,6 +173,20 @@ def load_data(csv_path: str) -> pd.DataFrame:
     df["pc_timestamp_ms"] = df["pc_timestamp_ms"].astype(float)
     df["board_timestamp_ms"] = df["board_timestamp_ms"].astype(float)
     df["node_id"] = df["node_id"].astype(int)
+
+    unknown_node_ids = sorted(set(df["node_id"].unique().tolist()) - set(RF_NODE_IDS))
+    if unknown_node_ids:
+        raise ValueError(
+            f"unsupported node_id values: {unknown_node_ids}; expected only {RF_NODE_IDS}"
+        )
+
+    missing_node_ids = [node_id for node_id in RF_NODE_IDS if node_id not in set(df["node_id"].unique().tolist())]
+    if missing_node_ids:
+        missing_names = [RF_NODE_NAMES[node_id] for node_id in missing_node_ids]
+        raise ValueError(
+            f"missing required node_id values: {missing_node_ids} ({missing_names})"
+        )
+
     df = df.sort_values(["session_id", "pc_timestamp_ms", "node_id"]).reset_index(drop=True)
     return df
 
@@ -404,7 +425,7 @@ def prepare_dataset(
     step_size: int,
     task: str,
 ) -> tuple[pd.DataFrame, pd.Series, pd.Series, list[int]]:
-    node_ids = sorted(df["node_id"].unique().tolist())
+    node_ids = RF_NODE_IDS.copy()
     synced_sessions: list[pd.DataFrame] = []
 
     for session_id, session_df in df.groupby("session_id", sort=False):
@@ -614,6 +635,7 @@ def train_and_evaluate(
 
 def main() -> int:
     args = build_arg_parser().parse_args()
+    node_ids = RF_NODE_IDS.copy()
 
     if args.window_size <= 1:
         raise ValueError("window-size must be greater than 1")
@@ -625,7 +647,7 @@ def main() -> int:
     df = load_data(args.input)
     print(
         f"[info] loaded rows={len(df)} sessions={df['session_id'].nunique()} "
-        f"nodes={sorted(df['node_id'].unique().tolist())}"
+        f"nodes={node_ids} names={[RF_NODE_NAMES[node_id] for node_id in node_ids]}"
     )
     print(f"[info] raw label counts:\n{df['label'].value_counts().to_string()}")
 

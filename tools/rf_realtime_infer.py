@@ -26,7 +26,13 @@ PROJECT_ROOT = THIS_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools.rf_baseline import BASE_CHANNELS, add_norm_features, extract_window_features
+from tools.rf_baseline import (
+    BASE_CHANNELS,
+    RF_NODE_IDS,
+    RF_NODE_NAMES,
+    add_norm_features,
+    extract_window_features,
+)
 
 
 @dataclass
@@ -148,6 +154,10 @@ def main() -> int:
     feature_names: list[str] = bundle["feature_names"]
     class_names: list[str] = bundle["class_names"]
     node_ids: list[int] = bundle["node_ids"]
+    if node_ids != RF_NODE_IDS:
+        raise ValueError(
+            f"model node_ids={node_ids} does not match required RF node_ids={RF_NODE_IDS}"
+        )
     config = bundle["config"]
 
     window_size = int(config["window_size"])
@@ -156,7 +166,10 @@ def main() -> int:
     max_packets = max(int(window_size * max(2.0, args.history_factor) * max(1, len(node_ids))), 200)
 
     print(f"[info] loading model: {args.model}")
-    print(f"[info] classes={class_names} node_ids={node_ids}")
+    print(
+        f"[info] classes={class_names} node_ids={node_ids} "
+        f"names={[RF_NODE_NAMES[node_id] for node_id in node_ids]}"
+    )
     print(f"[info] window_size={window_size} align_ms={align_ms} tolerance_ms={tolerance_ms}")
 
     try:
