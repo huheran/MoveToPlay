@@ -29,12 +29,16 @@ from pynput import keyboard
 
 
 DEFAULT_LABEL_MAP = {
-    "1": "idle",
-    "2": "attack",
-    "3": "raise",
-    "4": "move_noise",
-    "5": "transition",
-    "6": "jump",
+    "0": "idle",
+    "1": "right_hand_raise",
+    "2": "right_hand_slash",
+    "3": "walk",
+    "4": "run",
+    "5": "jump",
+    "6": "hands_cross_chest",
+    "7": "hands_chest_push",
+    "8": "left_hand_raise",
+    "9": "both_hands_raise",
 }
 
 
@@ -356,7 +360,16 @@ class CollectorApp:
         print("Raw serial acquisition with keyboard labeling")
 
     def _print_help(self) -> None:
-        print("[keys] 1=idle 2=attack 3=raise 4=move_noise 5=transition 6=jump")
+        print("[keys] 0=idle")
+        print("[keys] 1=right_hand_raise (ESC)")
+        print("[keys] 2=right_hand_slash (mouse_left)")
+        print("[keys] 3=walk (W)")
+        print("[keys] 4=run (Shift+W)")
+        print("[keys] 5=jump (SPACE)")
+        print("[keys] 6=hands_cross_chest (Q)")
+        print("[keys] 7=hands_chest_push (hold mouse_left -> release)")
+        print("[keys] 8=left_hand_raise")
+        print("[keys] 9=both_hands_raise")
         print("[keys] s=start/pause  c=new session  p=print status  q=save and quit")
 
     def _print_final_summary(self) -> None:
