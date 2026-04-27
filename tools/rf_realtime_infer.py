@@ -13,6 +13,7 @@ import sys
 import time
 from collections import deque
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Optional
 
@@ -48,6 +49,12 @@ class SerialPacket:
     gz: float
 
 
+class ParseStatus(str, Enum):
+    OK = "ok"
+    SKIP = "skip"
+    MALFORMED = "malformed"
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Real-time IMU action inference with Random Forest")
     parser.add_argument("--port", required=True, help="Serial port, e.g. COM12 or /dev/ttyUSB0")
@@ -60,15 +67,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def parse_line(line: str, pc_timestamp_ms: float) -> Optional[SerialPacket]:
+def parse_line(line: str, pc_timestamp_ms: float) -> tuple[ParseStatus, Optional[SerialPacket]]:
     text = line.strip()
     if not text:
-        return None
+        return ParseStatus.SKIP, None
+
+    if text.startswith(("#", "[", "I (", "W (", "E (", "D (", "V (")):
+        return ParseStatus.SKIP, None
+
     try:
         parts = [part.strip() for part in text.split(",")]
-        if len(parts) != 8:
-            return None
-        return SerialPacket(
+        if len(parts) < 8:
+            return ParseStatus.MALFORMED, None
+        packet = SerialPacket(
             pc_timestamp_ms=pc_timestamp_ms,
             board_timestamp_ms=float(parts[0]),
             node_id=int(parts[1]),
@@ -79,8 +90,9 @@ def parse_line(line: str, pc_timestamp_ms: float) -> Optional[SerialPacket]:
             gy=float(parts[6]),
             gz=float(parts[7]),
         )
+        return ParseStatus.OK, packet
     except ValueError:
-        return None
+        return ParseStatus.MALFORMED, None
 
 
 def packets_to_synced_frame_df(
@@ -182,6 +194,7 @@ def main() -> int:
     last_predict_ms = 0.0
     valid_lines = 0
     bad_lines = 0
+    skipped_lines = 0
 
     print("[info] real-time inference started, press Ctrl+C to stop")
     try:
@@ -191,8 +204,12 @@ def main() -> int:
             if not raw_line:
                 continue
 
-            packet = parse_line(raw_line, now_ms)
-            if packet is None:
+            status, packet = parse_line(raw_line, now_ms)
+            if status is ParseStatus.SKIP:
+                skipped_lines += 1
+                continue
+
+            if status is ParseStatus.MALFORMED or packet is None:
                 bad_lines += 1
                 if bad_lines % 20 == 0:
                     print(f"[warn] ignored malformed lines: {bad_lines}")
@@ -224,7 +241,8 @@ def main() -> int:
             )
             print(
                 f"\rpred={display_label:<10s} raw={pred_label:<10s} conf={confidence:.2f} "
-                f"frames={len(synced_df):<4d} valid={valid_lines:<6d} bad={bad_lines:<4d} {class_prob_text}   ",
+                f"frames={len(synced_df):<4d} valid={valid_lines:<6d} bad={bad_lines:<4d} skip={skipped_lines:<4d} "
+                f"{class_prob_text}   ",
                 end="",
                 flush=True,
             )
