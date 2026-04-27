@@ -27,19 +27,12 @@ from typing import Optional
 import serial
 from pynput import keyboard
 
+THIS_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = THIS_DIR.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-DEFAULT_LABEL_MAP = {
-    "0": "idle",
-    "1": "right_hand_raise",
-    "2": "right_hand_slash",
-    "3": "walk",
-    "4": "run",
-    "5": "jump",
-    "6": "hands_cross_chest",
-    "7": "hands_chest_push",
-    "8": "left_hand_raise",
-    "9": "both_hands_raise",
-}
+from tools.action_labels import DEFAULT_LABEL_MAP
 
 
 CSV_COLUMNS = [
@@ -360,16 +353,21 @@ class CollectorApp:
         print("Raw serial acquisition with keyboard labeling")
 
     def _print_help(self) -> None:
-        print("[keys] 0=idle")
-        print("[keys] 1=right_hand_raise (ESC)")
-        print("[keys] 2=right_hand_slash (mouse_left)")
-        print("[keys] 3=walk (W)")
-        print("[keys] 4=run (Shift+W)")
-        print("[keys] 5=jump (SPACE)")
-        print("[keys] 6=hands_cross_chest (Q)")
-        print("[keys] 7=hands_chest_push (hold mouse_left -> release)")
-        print("[keys] 8=left_hand_raise")
-        print("[keys] 9=both_hands_raise")
+        key_hints = {
+            "1": "ESC",
+            "2": "mouse_left",
+            "3": "W",
+            "4": "Shift+W",
+            "5": "SPACE",
+            "6": "Q",
+            "7": "hold mouse_left -> release",
+        }
+        for key, label in DEFAULT_LABEL_MAP.items():
+            hint = key_hints.get(key)
+            if hint:
+                print(f"[keys] {key}={label} ({hint})")
+            else:
+                print(f"[keys] {key}={label}")
         print("[keys] s=start/pause  c=new session  p=print status  q=save and quit")
 
     def _print_final_summary(self) -> None:
