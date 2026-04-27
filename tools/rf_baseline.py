@@ -11,7 +11,7 @@ Pipeline:
 6. Train / evaluate a Random Forest classifier without row-level leakage
 
 Default task:
-    jump / attack / else
+    multiclass action recognition aligned with the collector labels
 
 The script is intentionally written for clarity and easy modification.
 """
@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import sys
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -35,6 +36,13 @@ from sklearn.metrics import (
     precision_recall_fscore_support,
 )
 from sklearn.model_selection import GroupShuffleSplit
+
+THIS_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = THIS_DIR.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from tools.action_labels import MULTICLASS_LABEL_ORDER
 
 try:
     import matplotlib.pyplot as plt
@@ -63,8 +71,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--task",
         choices=["binary_jump", "three_class", "multiclass"],
-        default="three_class",
-        help="Classification task type",
+        default="multiclass",
+        help="Classification task type; default uses the full collector label set",
     )
     parser.add_argument(
         "--window-size",
@@ -208,7 +216,7 @@ def task_class_order(task: str, labels: Iterable[str]) -> list[str]:
         return ["jump", "non_jump"]
     if task == "three_class":
         return ["jump", "attack", "else"]
-    preferred = ["idle", "move_noise", "attack", "raise", "jump", "transition"]
+    preferred = MULTICLASS_LABEL_ORDER
     label_set = set(labels)
     ordered = [label for label in preferred if label in label_set]
     ordered.extend(sorted(label_set - set(ordered)))
