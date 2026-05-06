@@ -25,6 +25,7 @@ logs/
 Thumbs.db
 data/
 output/
+model/
 
 # 编辑器本地配置
 .vscode/

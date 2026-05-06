@@ -1,0 +1,24 @@
+{
+  "tree_count": 400,
+  "node_count": 17200,
+  "feature_count": 812,
+  "class_count": 10,
+  "class_names": [
+    "both_hands_raise",
+    "hands_chest_push",
+    "hands_cross_chest",
+    "idle",
+    "jump",
+    "left_hand_raise",
+    "right_hand_raise",
+    "right_hand_slash",
+    "run",
+    "walk"
+  ],
+  "node_ids": [
+    1,
+    2,
+    3,
+    4
+  ]
+}

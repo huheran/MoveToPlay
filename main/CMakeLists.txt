@@ -1,6 +1,8 @@
 idf_component_register(SRCS "app_main.c"
                        "imu_lsm6dsv.c"
                        "m2p_espnow.c"
+                       "rf_infer.c"
+                       "generated/rf_model_generated.c"
                        "usb_keyboard.c"
                    INCLUDE_DIRS "."
                    REQUIRES esp_driver_gpio

@@ -13,6 +13,7 @@
 
 #include "imu_lsm6dsv.h"
 #include "m2p_espnow.h"
+#include "rf_infer.h"
 #include "usb_keyboard.h"
 
 static const char *TAG = "imu_main";
@@ -51,7 +52,9 @@ static const char *TAG = "imu_main";
 #define MOVE_TO_PLAY_ESPNOW_SEND_SAMPLES  1
 
 #define DONGLE_ENABLE_SERIAL_OUTPUT       1
+#define DONGLE_ENABLE_RAW_CSV_OUTPUT      0
 #define DONGLE_ENABLE_SERIAL_AGE_COLUMN   1
+#define DONGLE_ENABLE_RF_INFERENCE        1
 #define DONGLE_ENABLE_USB_KEYBOARD        0
 #define DONGLE_ENABLE_USB_MOUSE           0
 #define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
@@ -95,6 +98,9 @@ static const char *TAG = "imu_main";
 #define DONGLE_SERIAL_STATE_RATE_HZ   25
 #define DONGLE_SERIAL_STATE_PERIOD_MS (1000 / DONGLE_SERIAL_STATE_RATE_HZ)
 #define DONGLE_MAX_TRACKER_NODES      8
+#define DONGLE_RF_MAX_NODE_AGE_MS     250
+#define DONGLE_RF_PRINT_INTERVAL_MS   120
+#define DONGLE_RF_MIN_CONFIDENCE      0.45f
 
 #define STATUS_LED_GPIO               GPIO_NUM_38
 #define STATUS_LED_ON_LEVEL           1
@@ -285,6 +291,7 @@ typedef struct {
 } dongle_latest_node_t;
 
 static dongle_latest_node_t s_dongle_latest_nodes[DONGLE_MAX_TRACKER_NODES];
+static int64_t s_dongle_last_rf_print_us = 0;
 
 static dongle_latest_node_t *dongle_latest_node_for_id(uint8_t node_id)
 {
@@ -317,6 +324,7 @@ static void dongle_store_latest_packet(const m2p_espnow_rx_packet_t *rx_packet)
     node->packet = rx_packet->packet;
 }
 
+#if DONGLE_ENABLE_RAW_CSV_OUTPUT
 static void dongle_print_latest_node(dongle_latest_node_t *node, int64_t now_us)
 {
     const m2p_espnow_tracker_packet_t *packet = &node->packet;
@@ -353,9 +361,11 @@ static void dongle_print_latest_node(dongle_latest_node_t *node, int64_t now_us)
 
     node->dirty = false;
 }
+#endif
 
 static void dongle_print_latest_states(void)
 {
+#if DONGLE_ENABLE_RAW_CSV_OUTPUT
     const int64_t now_us = esp_timer_get_time();
 
     for (size_t i = 0; i < DONGLE_MAX_TRACKER_NODES; i++) {
@@ -364,7 +374,86 @@ static void dongle_print_latest_states(void)
             dongle_print_latest_node(node, now_us);
         }
     }
+#endif
 }
+
+#if DONGLE_ENABLE_RF_INFERENCE
+static bool dongle_build_rf_frame(rf_infer_node_sample_t frame[RF_INFER_NODE_COUNT],
+                                  int64_t now_us,
+                                  double *out_max_age_ms)
+{
+    double max_age_ms = 0.0;
+
+    for (uint8_t node_id = 1; node_id <= RF_INFER_NODE_COUNT; node_id++) {
+        dongle_latest_node_t *node = dongle_latest_node_for_id(node_id);
+        if (node == NULL || !node->valid || node->last_rx_us <= 0) {
+            return false;
+        }
+
+        const int64_t age_us = now_us - node->last_rx_us;
+        if (age_us < 0 || age_us > ((int64_t)DONGLE_RF_MAX_NODE_AGE_MS * 1000LL)) {
+            return false;
+        }
+
+        const double age_ms = (double)age_us / 1000.0;
+        if (age_ms > max_age_ms) {
+            max_age_ms = age_ms;
+        }
+
+        const m2p_espnow_tracker_packet_t *packet = &node->packet;
+        rf_infer_node_sample_t *sample = &frame[node_id - 1U];
+        sample->ax = packet->accel_g[0];
+        sample->ay = packet->accel_g[1];
+        sample->az = packet->accel_g[2];
+        sample->gx = packet->gyro_dps[0];
+        sample->gy = packet->gyro_dps[1];
+        sample->gz = packet->gyro_dps[2];
+    }
+
+    if (out_max_age_ms != NULL) {
+        *out_max_age_ms = max_age_ms;
+    }
+    return true;
+}
+
+static void dongle_run_rf_inference(int64_t now_us)
+{
+    rf_infer_node_sample_t frame[RF_INFER_NODE_COUNT] = {0};
+    double max_age_ms = 0.0;
+
+    if (!dongle_build_rf_frame(frame, now_us, &max_age_ms)) {
+        return;
+    }
+
+    rf_infer_result_t result = {0};
+    const int64_t infer_start_us = esp_timer_get_time();
+    if (!rf_infer_push_frame(frame, &result) || !result.valid) {
+        return;
+    }
+    const int64_t infer_elapsed_us = esp_timer_get_time() - infer_start_us;
+
+    if ((now_us - s_dongle_last_rf_print_us) <
+        ((int64_t)DONGLE_RF_PRINT_INTERVAL_MS * 1000LL)) {
+        return;
+    }
+    s_dongle_last_rf_print_us = now_us;
+
+    const char *display_label = result.label;
+    const char *display_key = result.key_text;
+    if (result.confidence < DONGLE_RF_MIN_CONFIDENCE) {
+        display_label = "uncertain";
+        display_key = "-";
+    }
+
+    printf("# infer: action=%s key=%s conf=%.2f frames=%" PRIu32 " max_age_ms=%.1f infer_us=%" PRId64 "\n",
+           display_label,
+           display_key,
+           (double)result.confidence,
+           result.frame_count,
+           max_age_ms,
+           infer_elapsed_us);
+}
+#endif
 #endif
 
 static void espnow_rx_task(void *arg)
@@ -406,6 +495,9 @@ static void espnow_rx_task(void *arg)
         now_tick = xTaskGetTickCount();
         if ((now_tick - last_print_tick) >= print_period_ticks) {
             dongle_print_latest_states();
+#if DONGLE_ENABLE_RF_INFERENCE
+            dongle_run_rf_inference(esp_timer_get_time());
+#endif
             last_print_tick += print_period_ticks;
             if ((now_tick - last_print_tick) >= print_period_ticks) {
                 last_print_tick = now_tick;
@@ -505,7 +597,9 @@ static void start_dongle_mode(void)
     ESP_LOGI(TAG, "serial output=%d", DONGLE_ENABLE_SERIAL_OUTPUT);
 #if DONGLE_ENABLE_SERIAL_OUTPUT
     ESP_LOGI(TAG, "serial latest-state rate=%d Hz", DONGLE_SERIAL_STATE_RATE_HZ);
+    ESP_LOGI(TAG, "raw csv output=%d", DONGLE_ENABLE_RAW_CSV_OUTPUT);
     ESP_LOGI(TAG, "serial age column=%d", DONGLE_ENABLE_SERIAL_AGE_COLUMN);
+    ESP_LOGI(TAG, "rf inference=%d", DONGLE_ENABLE_RF_INFERENCE);
 #endif
     ESP_LOGI(TAG, "usb keyboard=%d", DONGLE_ENABLE_USB_KEYBOARD);
     ESP_LOGI(TAG, "usb mouse=%d", DONGLE_ENABLE_USB_MOUSE);
