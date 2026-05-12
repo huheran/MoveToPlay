@@ -15,6 +15,8 @@
 #include "m2p_espnow.h"
 #include "rf_infer.h"
 #include "usb_keyboard.h"
+#include "battery_monitor.h"
+#include "status_led.h"
 
 static const char *TAG = "imu_main";
 
@@ -55,8 +57,8 @@ static const char *TAG = "imu_main";
 #define DONGLE_ENABLE_RAW_CSV_OUTPUT      0
 #define DONGLE_ENABLE_SERIAL_AGE_COLUMN   1
 #define DONGLE_ENABLE_RF_INFERENCE        1
-#define DONGLE_ENABLE_USB_KEYBOARD        0
-#define DONGLE_ENABLE_USB_MOUSE           0
+#define DONGLE_ENABLE_USB_KEYBOARD        1
+#define DONGLE_ENABLE_USB_MOUSE           1
 #define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
 #define DONGLE_ENABLE_USB_MOUSE_TEST      0
 
@@ -82,7 +84,7 @@ static const char *TAG = "imu_main";
  *   左手板     -> TRACKER_NODE_LEFT_HAND
  *   腿部板     -> TRACKER_NODE_LEG
  */
-#define MOVE_TO_PLAY_TRACKER_NODE_ID  TRACKER_NODE_LEG 
+#define MOVE_TO_PLAY_TRACKER_NODE_ID  TRACKER_NODE_LEFT_HAND 
 
 #define BOARD_NODE_ID                 MOVE_TO_PLAY_TRACKER_NODE_ID
 
@@ -102,8 +104,7 @@ static const char *TAG = "imu_main";
 #define DONGLE_RF_PRINT_INTERVAL_MS   120
 #define DONGLE_RF_MIN_CONFIDENCE      0.45f
 
-#define STATUS_LED_GPIO               GPIO_NUM_38
-#define STATUS_LED_ON_LEVEL           1
+#define BATTERY_REPORT_INTERVAL_MS    5000
 
 #define ERROR_BLINK_PAUSE_MS          1500
 #define TRACKER_LED_HEARTBEAT_PERIOD_MS 2000
@@ -161,14 +162,16 @@ static const char *tracker_node_name(uint8_t node_id)
 
 static void led_init(void)
 {
-    gpio_reset_pin(STATUS_LED_GPIO);
-    gpio_set_direction(STATUS_LED_GPIO, GPIO_MODE_OUTPUT);
-    gpio_set_level(STATUS_LED_GPIO, !STATUS_LED_ON_LEVEL);
+    status_led_init();
 }
 
 static inline void led_set(bool on)
 {
-    gpio_set_level(STATUS_LED_GPIO, on ? STATUS_LED_ON_LEVEL : !STATUS_LED_ON_LEVEL);
+    if (on) {
+        status_led_set_color(10, 10, 10);
+    } else {
+        status_led_off();
+    }
 }
 
 static void led_blink_startup(uint32_t times, uint32_t on_ms, uint32_t off_ms)
@@ -258,6 +261,8 @@ static void imu_sampling_task(void *arg)
 #endif
 
             if ((sample_index % IMU_PRINT_DECIMATION) == 0) {
+                /* IMU serial output disabled during battery test */
+#if 0
                 printf("%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
                        (double)sample.accel_g[0],
                        (double)sample.accel_g[1],
@@ -265,6 +270,7 @@ static void imu_sampling_task(void *arg)
                        (double)sample.gyro_dps[0],
                        (double)sample.gyro_dps[1],
                        (double)sample.gyro_dps[2]);
+#endif
             }
             sample_index++;
         }
@@ -378,6 +384,197 @@ static void dongle_print_latest_states(void)
 }
 
 #if DONGLE_ENABLE_RF_INFERENCE
+
+#if DONGLE_ENABLE_USB_KEYBOARD
+#define DONGLE_KEY_TAP_HOLD_MS        80
+#define DONGLE_MOUSE_MOVE_DELTA       60
+#define DONGLE_CONFIRM_FRAMES         3
+#define DONGLE_INFER_RATE_HZ          25
+
+#define HID_KEY_E       0x08
+#define HID_KEY_M       0x10
+#define HID_KEY_Q       0x14
+#define HID_KEY_W       0x1A
+#define HID_KEY_SPACE   0x2C
+#define HID_KEY_ESCAPE  0x29
+
+typedef enum {
+    ACTION_TYPE_NONE,
+    ACTION_TYPE_KEY_TAP,
+    ACTION_TYPE_KEY_HOLD,
+    ACTION_TYPE_MOUSE_CLICK,
+    ACTION_TYPE_MOUSE_MOVE_LEFT,
+} dongle_action_type_t;
+
+typedef enum {
+    TRIGGER_COOLDOWN,
+    TRIGGER_EDGE,
+    TRIGGER_SUSTAIN,
+} dongle_trigger_mode_t;
+
+typedef struct {
+    dongle_action_type_t type;
+    uint8_t modifier;
+    uint8_t keycode;
+    dongle_trigger_mode_t trigger;
+    uint16_t cooldown_ms;
+    uint16_t sustain_frames;
+} dongle_key_action_t;
+
+static const dongle_key_action_t s_class_key_actions[RF_MODEL_CLASS_COUNT] = {
+    [0] = { ACTION_TYPE_MOUSE_MOVE_LEFT, 0, 0, TRIGGER_SUSTAIN, 0, 25 },
+    [1] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_Q, TRIGGER_COOLDOWN, 2000, 0 },
+    [2] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_E, TRIGGER_COOLDOWN, 1000, 0 },
+    [3] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },
+    [4] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 3000, 0 },
+    [5] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_ESCAPE, TRIGGER_SUSTAIN, 0, 25 },
+    [6] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_M, TRIGGER_SUSTAIN, 0, 25 },
+    [7] = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_COOLDOWN, 400, 0 },
+    [8] = { ACTION_TYPE_KEY_HOLD, USB_KEYBOARD_MOD_LEFT_SHIFT, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 },
+    [9] = { ACTION_TYPE_KEY_HOLD, 0, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 },
+};
+
+static int8_t s_dongle_held_class = -1;
+static int8_t s_dongle_confirmed_class = -1;
+static int8_t s_dongle_pending_class = -1;
+static uint8_t s_dongle_pending_count = 0;
+
+static int64_t s_dongle_last_fire_us[RF_MODEL_CLASS_COUNT] = {0};
+static bool s_dongle_edge_armed[RF_MODEL_CLASS_COUNT] = {
+    true, true, true, true, true, true, true, true, true, true
+};
+static uint16_t s_dongle_sustain_count[RF_MODEL_CLASS_COUNT] = {0};
+
+static uint8_t dongle_smooth_class(uint8_t raw_class)
+{
+    if ((int8_t)raw_class == s_dongle_pending_class) {
+        if (s_dongle_pending_count < 255) {
+            s_dongle_pending_count++;
+        }
+    } else {
+        s_dongle_pending_class = (int8_t)raw_class;
+        s_dongle_pending_count = 1;
+    }
+
+    if (s_dongle_pending_count >= DONGLE_CONFIRM_FRAMES) {
+        s_dongle_confirmed_class = s_dongle_pending_class;
+    }
+
+    return (s_dongle_confirmed_class >= 0) ? (uint8_t)s_dongle_confirmed_class : 3;
+}
+
+static void dongle_fire_action(const dongle_key_action_t *action)
+{
+    if (action->type == ACTION_TYPE_KEY_TAP) {
+        usb_keyboard_tap_key(action->modifier, action->keycode, DONGLE_KEY_TAP_HOLD_MS);
+    } else if (action->type == ACTION_TYPE_MOUSE_CLICK) {
+        usb_mouse_click(USB_MOUSE_BUTTON_LEFT, DONGLE_KEY_TAP_HOLD_MS);
+    } else if (action->type == ACTION_TYPE_MOUSE_MOVE_LEFT) {
+        usb_mouse_move(-DONGLE_MOUSE_MOVE_DELTA, 0, 0, 0);
+    }
+}
+
+static void dongle_send_key_action(const rf_infer_result_t *result, int64_t now_us)
+{
+    if (!usb_keyboard_is_ready()) {
+        return;
+    }
+
+    uint8_t raw_class = result->class_index;
+    if (result->confidence < DONGLE_RF_MIN_CONFIDENCE) {
+        raw_class = 3;
+    }
+
+    uint8_t class_idx = dongle_smooth_class(raw_class);
+    const dongle_key_action_t *action = &s_class_key_actions[class_idx];
+
+    /* Update sustain counters: increment for current class, reset others */
+    for (uint8_t i = 0; i < RF_MODEL_CLASS_COUNT; i++) {
+        if (i == class_idx) {
+            if (s_dongle_sustain_count[i] < UINT16_MAX) {
+                s_dongle_sustain_count[i]++;
+            }
+        } else {
+            s_dongle_sustain_count[i] = 0;
+        }
+    }
+
+    /* Update edge arming: if we left a class, re-arm it */
+    for (uint8_t i = 0; i < RF_MODEL_CLASS_COUNT; i++) {
+        if (i != class_idx && !s_dongle_edge_armed[i]) {
+            const dongle_key_action_t *a = &s_class_key_actions[i];
+            if (a->trigger == TRIGGER_EDGE) {
+                int64_t since_fire = now_us - s_dongle_last_fire_us[i];
+                if (since_fire >= ((int64_t)a->cooldown_ms * 1000LL)) {
+                    s_dongle_edge_armed[i] = true;
+                }
+            }
+        }
+    }
+
+    /* Handle NONE (idle) */
+    if (action->type == ACTION_TYPE_NONE) {
+        if (s_dongle_held_class >= 0) {
+            usb_keyboard_release();
+            s_dongle_held_class = -1;
+        }
+        return;
+    }
+
+    /* Handle HOLD (walk/run) */
+    if (action->type == ACTION_TYPE_KEY_HOLD) {
+        if (s_dongle_held_class != (int8_t)class_idx) {
+            if (s_dongle_held_class >= 0) {
+                usb_keyboard_release();
+            }
+            const uint8_t keycodes[6] = { action->keycode, 0, 0, 0, 0, 0 };
+            usb_keyboard_press_keys(action->modifier, keycodes);
+            s_dongle_held_class = (int8_t)class_idx;
+        }
+        return;
+    }
+
+    /* Release any held key before tap actions */
+    if (s_dongle_held_class >= 0) {
+        usb_keyboard_release();
+        s_dongle_held_class = -1;
+    }
+
+    /* Handle tap-like actions based on trigger mode */
+    bool should_fire = false;
+
+    switch (action->trigger) {
+    case TRIGGER_COOLDOWN: {
+        int64_t elapsed = now_us - s_dongle_last_fire_us[class_idx];
+        if (elapsed >= ((int64_t)action->cooldown_ms * 1000LL)) {
+            should_fire = true;
+        }
+        break;
+    }
+    case TRIGGER_EDGE: {
+        if (s_dongle_edge_armed[class_idx]) {
+            should_fire = true;
+        }
+        break;
+    }
+    case TRIGGER_SUSTAIN: {
+        if (s_dongle_sustain_count[class_idx] == action->sustain_frames) {
+            should_fire = true;
+        }
+        break;
+    }
+    }
+
+    if (should_fire) {
+        dongle_fire_action(action);
+        s_dongle_last_fire_us[class_idx] = now_us;
+        if (action->trigger == TRIGGER_EDGE) {
+            s_dongle_edge_armed[class_idx] = false;
+        }
+    }
+}
+#endif
+
 static bool dongle_build_rf_frame(rf_infer_node_sample_t frame[RF_INFER_NODE_COUNT],
                                   int64_t now_us,
                                   double *out_max_age_ms)
@@ -431,6 +628,10 @@ static void dongle_run_rf_inference(int64_t now_us)
         return;
     }
     const int64_t infer_elapsed_us = esp_timer_get_time() - infer_start_us;
+
+#if DONGLE_ENABLE_USB_KEYBOARD
+    dongle_send_key_action(&result, now_us);
+#endif
 
     if ((now_us - s_dongle_last_rf_print_us) <
         ((int64_t)DONGLE_RF_PRINT_INTERVAL_MS * 1000LL)) {
@@ -706,10 +907,36 @@ static void start_tracker_mode(void)
                             tskNO_AFFINITY);
 }
 
+static void battery_monitor_task(void *arg)
+{
+    (void)arg;
+
+    battery_monitor_init();
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    while (1) {
+        int percent = battery_monitor_get_percent();
+        float voltage = battery_monitor_get_voltage();
+
+        printf("# battery: %.2fV  %d%%\n", (double)voltage, percent);
+        status_led_set_battery_color(percent);
+
+        vTaskDelay(pdMS_TO_TICKS(BATTERY_REPORT_INTERVAL_MS));
+    }
+}
+
 void app_main(void)
 {
     led_init();
     led_blink_startup(3, 120, 120);
+
+    xTaskCreatePinnedToCore(battery_monitor_task,
+                            "battery_task",
+                            3072,
+                            NULL,
+                            3,
+                            NULL,
+                            tskNO_AFFINITY);
 
     ESP_LOGI(TAG, "Booting MoveToPlay");
     ESP_LOGI(TAG, "device_mode=%d (0=dongle, 1=tracker)", MOVE_TO_PLAY_DEVICE_MODE);
