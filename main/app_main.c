@@ -14,6 +14,7 @@
 #include "imu_lsm6dsv.h"
 #include "m2p_espnow.h"
 #include "rf_infer.h"
+#include "cnn_infer.h"
 #include "usb_keyboard.h"
 #include "battery_monitor.h"
 #include "status_led.h"
@@ -53,14 +54,34 @@ static const char *TAG = "imu_main";
 #define MOVE_TO_PLAY_ENABLE_ESPNOW        1
 #define MOVE_TO_PLAY_ESPNOW_SEND_SAMPLES  1
 
+/*
+ * DONGLE_DATA_COLLECT_MODE:
+ *   1 = 数据采集模式。关闭推理和USB HID，只输出原始CSV供采集脚本使用。
+ *   0 = 正常游玩模式。开启推理和USB HID输出。
+ */
+#define DONGLE_DATA_COLLECT_MODE          1
+
+#if DONGLE_DATA_COLLECT_MODE
+#define DONGLE_ENABLE_SERIAL_OUTPUT       1
+#define DONGLE_ENABLE_RAW_CSV_OUTPUT      1
+#define DONGLE_ENABLE_SERIAL_AGE_COLUMN   1
+#define DONGLE_ENABLE_RF_INFERENCE        0
+#define DONGLE_USE_CNN_INFER              0
+#define DONGLE_ENABLE_USB_KEYBOARD        0
+#define DONGLE_ENABLE_USB_MOUSE           0
+#define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
+#define DONGLE_ENABLE_USB_MOUSE_TEST      0
+#else
 #define DONGLE_ENABLE_SERIAL_OUTPUT       1
 #define DONGLE_ENABLE_RAW_CSV_OUTPUT      0
 #define DONGLE_ENABLE_SERIAL_AGE_COLUMN   1
 #define DONGLE_ENABLE_RF_INFERENCE        1
+#define DONGLE_USE_CNN_INFER              1
 #define DONGLE_ENABLE_USB_KEYBOARD        1
 #define DONGLE_ENABLE_USB_MOUSE           1
 #define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
 #define DONGLE_ENABLE_USB_MOUSE_TEST      0
+#endif
 
 #define TRACKER_NODE_CHEST            1
 #define TRACKER_NODE_RIGHT_HAND       2
@@ -84,7 +105,7 @@ static const char *TAG = "imu_main";
  *   左手板     -> TRACKER_NODE_LEFT_HAND
  *   腿部板     -> TRACKER_NODE_LEG
  */
-#define MOVE_TO_PLAY_TRACKER_NODE_ID  TRACKER_NODE_LEFT_HAND 
+#define MOVE_TO_PLAY_TRACKER_NODE_ID  TRACKER_NODE_LEFT_HAND
 
 #define BOARD_NODE_ID                 MOVE_TO_PLAY_TRACKER_NODE_ID
 
@@ -261,22 +282,15 @@ static void imu_sampling_task(void *arg)
 #endif
 
             if ((sample_index % IMU_PRINT_DECIMATION) == 0) {
-                /* IMU serial output disabled during battery test */
-#if 0
-                printf("%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
-                       (double)sample.accel_g[0],
-                       (double)sample.accel_g[1],
-                       (double)sample.accel_g[2],
-                       (double)sample.gyro_dps[0],
-                       (double)sample.gyro_dps[1],
-                       (double)sample.gyro_dps[2]);
-#endif
+                /* Tracker serial output: battery only (via battery_monitor_task) */
             }
             sample_index++;
         }
 
-        /* Normal tracker heartbeat: mostly off, one short pulse every few seconds. */
-        led_set(led_heartbeat_ms < TRACKER_LED_HEARTBEAT_ON_MS);
+        /* Tracker heartbeat: briefly turn off LED to indicate alive, battery color is set by battery_monitor_task */
+        if (led_heartbeat_ms < TRACKER_LED_HEARTBEAT_ON_MS) {
+            status_led_off();
+        }
         led_heartbeat_ms += IMU_SAMPLE_PERIOD_MS;
         if (led_heartbeat_ms >= TRACKER_LED_HEARTBEAT_PERIOD_MS) {
             led_heartbeat_ms = 0;
@@ -421,6 +435,28 @@ typedef struct {
     uint16_t sustain_frames;
 } dongle_key_action_t;
 
+#if DONGLE_USE_CNN_INFER
+/* CNN class order: idle(0), right_hand_raise(1), right_hand_slash(2), walk(3),
+   run(4), jump(5), hands_cross_chest(6), hands_chest_push(7),
+   left_hand_raise(8), both_hands_raise(9) */
+static const dongle_key_action_t s_class_key_actions[CNN1D_NUM_CLASSES] = {
+    [0] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                              /* idle */
+    [1] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_M, TRIGGER_SUSTAIN, 0, 25 },                   /* right_hand_raise -> M */
+    [2] = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_COOLDOWN, 400, 0 },                     /* right_hand_slash -> 鼠标左键 */
+    [3] = { ACTION_TYPE_KEY_HOLD, 0, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 },                  /* walk */
+    [4] = { ACTION_TYPE_KEY_HOLD, USB_KEYBOARD_MOD_LEFT_SHIFT, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 }, /* run */
+    [5] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 3000, 0 },                /* jump */
+    [6] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_E, TRIGGER_COOLDOWN, 1000, 0 },                /* hands_cross_chest -> E */
+    [7] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_Q, TRIGGER_COOLDOWN, 2000, 0 },                /* hands_chest_push -> Q */
+    [8] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_ESCAPE, TRIGGER_SUSTAIN, 0, 25 },              /* left_hand_raise -> ESC */
+    [9] = { ACTION_TYPE_MOUSE_MOVE_LEFT, 0, 0, TRIGGER_SUSTAIN, 0, 25 },                   /* both_hands_raise -> 鼠标左移 */
+};
+#define DONGLE_NUM_CLASSES CNN1D_NUM_CLASSES
+#define DONGLE_IDLE_CLASS 0
+#else
+/* RF class order: both_hands_raise(0), hands_chest_push(1), hands_cross_chest(2),
+   idle(3), jump(4), left_hand_raise(5), right_hand_raise(6),
+   right_hand_slash(7), run(8), walk(9) */
 static const dongle_key_action_t s_class_key_actions[RF_MODEL_CLASS_COUNT] = {
     [0] = { ACTION_TYPE_MOUSE_MOVE_LEFT, 0, 0, TRIGGER_SUSTAIN, 0, 25 },
     [1] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_Q, TRIGGER_COOLDOWN, 2000, 0 },
@@ -433,17 +469,20 @@ static const dongle_key_action_t s_class_key_actions[RF_MODEL_CLASS_COUNT] = {
     [8] = { ACTION_TYPE_KEY_HOLD, USB_KEYBOARD_MOD_LEFT_SHIFT, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 },
     [9] = { ACTION_TYPE_KEY_HOLD, 0, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 },
 };
+#define DONGLE_NUM_CLASSES RF_MODEL_CLASS_COUNT
+#define DONGLE_IDLE_CLASS 3
+#endif
 
 static int8_t s_dongle_held_class = -1;
 static int8_t s_dongle_confirmed_class = -1;
 static int8_t s_dongle_pending_class = -1;
 static uint8_t s_dongle_pending_count = 0;
 
-static int64_t s_dongle_last_fire_us[RF_MODEL_CLASS_COUNT] = {0};
-static bool s_dongle_edge_armed[RF_MODEL_CLASS_COUNT] = {
+static int64_t s_dongle_last_fire_us[DONGLE_NUM_CLASSES] = {0};
+static bool s_dongle_edge_armed[DONGLE_NUM_CLASSES] = {
     true, true, true, true, true, true, true, true, true, true
 };
-static uint16_t s_dongle_sustain_count[RF_MODEL_CLASS_COUNT] = {0};
+static uint16_t s_dongle_sustain_count[DONGLE_NUM_CLASSES] = {0};
 
 static uint8_t dongle_smooth_class(uint8_t raw_class)
 {
@@ -460,7 +499,7 @@ static uint8_t dongle_smooth_class(uint8_t raw_class)
         s_dongle_confirmed_class = s_dongle_pending_class;
     }
 
-    return (s_dongle_confirmed_class >= 0) ? (uint8_t)s_dongle_confirmed_class : 3;
+    return (s_dongle_confirmed_class >= 0) ? (uint8_t)s_dongle_confirmed_class : DONGLE_IDLE_CLASS;
 }
 
 static void dongle_fire_action(const dongle_key_action_t *action)
@@ -474,22 +513,22 @@ static void dongle_fire_action(const dongle_key_action_t *action)
     }
 }
 
-static void dongle_send_key_action(const rf_infer_result_t *result, int64_t now_us)
+static void dongle_send_key_action(uint8_t infer_class, float infer_confidence, int64_t now_us)
 {
     if (!usb_keyboard_is_ready()) {
         return;
     }
 
-    uint8_t raw_class = result->class_index;
-    if (result->confidence < DONGLE_RF_MIN_CONFIDENCE) {
-        raw_class = 3;
+    uint8_t raw_class = infer_class;
+    if (infer_confidence < DONGLE_RF_MIN_CONFIDENCE) {
+        raw_class = DONGLE_IDLE_CLASS;
     }
 
     uint8_t class_idx = dongle_smooth_class(raw_class);
     const dongle_key_action_t *action = &s_class_key_actions[class_idx];
 
     /* Update sustain counters: increment for current class, reset others */
-    for (uint8_t i = 0; i < RF_MODEL_CLASS_COUNT; i++) {
+    for (uint8_t i = 0; i < DONGLE_NUM_CLASSES; i++) {
         if (i == class_idx) {
             if (s_dongle_sustain_count[i] < UINT16_MAX) {
                 s_dongle_sustain_count[i]++;
@@ -500,7 +539,7 @@ static void dongle_send_key_action(const rf_infer_result_t *result, int64_t now_
     }
 
     /* Update edge arming: if we left a class, re-arm it */
-    for (uint8_t i = 0; i < RF_MODEL_CLASS_COUNT; i++) {
+    for (uint8_t i = 0; i < DONGLE_NUM_CLASSES; i++) {
         if (i != class_idx && !s_dongle_edge_armed[i]) {
             const dongle_key_action_t *a = &s_class_key_actions[i];
             if (a->trigger == TRIGGER_EDGE) {
@@ -622,6 +661,29 @@ static void dongle_run_rf_inference(int64_t now_us)
         return;
     }
 
+#if DONGLE_USE_CNN_INFER
+    cnn_infer_node_sample_t cnn_frame[CNN_INFER_NODE_COUNT];
+    for (int i = 0; i < CNN_INFER_NODE_COUNT; i++) {
+        cnn_frame[i].ax = frame[i].ax;
+        cnn_frame[i].ay = frame[i].ay;
+        cnn_frame[i].az = frame[i].az;
+        cnn_frame[i].gx = frame[i].gx;
+        cnn_frame[i].gy = frame[i].gy;
+        cnn_frame[i].gz = frame[i].gz;
+    }
+
+    cnn_infer_result_t cnn_result = {0};
+    const int64_t infer_start_us = esp_timer_get_time();
+    if (!cnn_infer_push_frame(cnn_frame, &cnn_result) || !cnn_result.valid) {
+        return;
+    }
+    const int64_t infer_elapsed_us = esp_timer_get_time() - infer_start_us;
+
+    const uint8_t result_class = cnn_result.class_index;
+    const float result_confidence = cnn_result.confidence;
+    const char *result_label = cnn_result.label;
+    const uint32_t result_frames = cnn_result.frame_count;
+#else
     rf_infer_result_t result = {0};
     const int64_t infer_start_us = esp_timer_get_time();
     if (!rf_infer_push_frame(frame, &result) || !result.valid) {
@@ -629,8 +691,14 @@ static void dongle_run_rf_inference(int64_t now_us)
     }
     const int64_t infer_elapsed_us = esp_timer_get_time() - infer_start_us;
 
+    const uint8_t result_class = result.class_index;
+    const float result_confidence = result.confidence;
+    const char *result_label = result.label;
+    const uint32_t result_frames = result.frame_count;
+#endif
+
 #if DONGLE_ENABLE_USB_KEYBOARD
-    dongle_send_key_action(&result, now_us);
+    dongle_send_key_action(result_class, result_confidence, now_us);
 #endif
 
     if ((now_us - s_dongle_last_rf_print_us) <
@@ -639,18 +707,15 @@ static void dongle_run_rf_inference(int64_t now_us)
     }
     s_dongle_last_rf_print_us = now_us;
 
-    const char *display_label = result.label;
-    const char *display_key = result.key_text;
-    if (result.confidence < DONGLE_RF_MIN_CONFIDENCE) {
+    const char *display_label = result_label;
+    if (result_confidence < DONGLE_RF_MIN_CONFIDENCE) {
         display_label = "uncertain";
-        display_key = "-";
     }
 
-    printf("# infer: action=%s key=%s conf=%.2f frames=%" PRIu32 " max_age_ms=%.1f infer_us=%" PRId64 "\n",
+    printf("# infer: action=%s conf=%.2f frames=%" PRIu32 " max_age_ms=%.1f infer_us=%" PRId64 "\n",
            display_label,
-           display_key,
-           (double)result.confidence,
-           result.frame_count,
+           (double)result_confidence,
+           result_frames,
            max_age_ms,
            infer_elapsed_us);
 }
@@ -896,8 +961,6 @@ static void start_tracker_mode(void)
     led_set(true);
     vTaskDelay(pdMS_TO_TICKS(500));
 
-    print_csv_header();
-
     xTaskCreatePinnedToCore(imu_sampling_task,
                             "imu_sampling_task",
                             4096,
@@ -930,20 +993,19 @@ void app_main(void)
     led_init();
     led_blink_startup(3, 120, 120);
 
-    xTaskCreatePinnedToCore(battery_monitor_task,
-                            "battery_task",
-                            3072,
-                            NULL,
-                            3,
-                            NULL,
-                            tskNO_AFFINITY);
-
     ESP_LOGI(TAG, "Booting MoveToPlay");
     ESP_LOGI(TAG, "device_mode=%d (0=dongle, 1=tracker)", MOVE_TO_PLAY_DEVICE_MODE);
 
     if (MOVE_TO_PLAY_DEVICE_MODE == MOVE_TO_PLAY_MODE_DONGLE) {
         start_dongle_mode();
     } else {
+        xTaskCreatePinnedToCore(battery_monitor_task,
+                                "battery_task",
+                                3072,
+                                NULL,
+                                3,
+                                NULL,
+                                tskNO_AFFINITY);
         start_tracker_mode();
     }
 }

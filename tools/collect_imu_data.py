@@ -236,6 +236,8 @@ class SerialReader:
 class CollectorApp:
     """Main data collection loop and operator interaction."""
 
+    LABEL_SWITCH_DISCARD_MS = 3000
+
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
         self.label_map = DEFAULT_LABEL_MAP.copy()
@@ -245,6 +247,10 @@ class CollectorApp:
         self.parse_error_count = 0
         self.last_status_time = 0.0
         self.running = True
+        self._resume_time_ms = 0
+        self._discarded_samples = 0
+        self._buffer: list[tuple] = []
+        self._pause_trim_pending = False
 
         self.parser = ImuLineParser(delimiter=args.delimiter)
         self.writer = CsvSessionWriter(Path(args.output))
@@ -277,6 +283,7 @@ class CollectorApp:
             print(f"\n[error] serial read failed: {exc}")
             return 1
         finally:
+            self._flush_buffer()
             self.keyboard.stop()
             self.serial_reader.close()
             self.writer.close()
@@ -290,9 +297,14 @@ class CollectorApp:
                 self.current_label = self.label_map[key]
                 print(f"\n[label] current label -> {self.current_label}")
             elif key == "s":
-                self.collecting = not self.collecting
-                state = "running" if self.collecting else "paused"
-                print(f"\n[state] collection {state}")
+                if self.collecting:
+                    self.collecting = False
+                    self._pause_trim_pending = True
+                    print(f"\n[state] collection paused (trimming last 3s)")
+                else:
+                    self.collecting = True
+                    self._resume_time_ms = int(time.time() * 1000)
+                    print(f"\n[state] collection running (discarding first 3s)")
             elif key == "c":
                 new_path = self.writer.rotate_session()
                 print(f"\n[session] switched to {self.writer.session_id}: {new_path}")
@@ -319,9 +331,45 @@ class CollectorApp:
         if sample is None:
             return
 
-        if self.collecting:
-            self.writer.write_sample(sample, self.current_label)
-            self.total_samples += 1
+        if not self.collecting:
+            if self._pause_trim_pending:
+                cutoff_ms = pc_timestamp_ms - self.LABEL_SWITCH_DISCARD_MS
+                before = len(self._buffer)
+                self._buffer = [(s, l) for (s, l) in self._buffer if s.pc_timestamp_ms < cutoff_ms]
+                trimmed = before - len(self._buffer)
+                for s, l in self._buffer:
+                    self.writer.write_sample(s, l)
+                    self.total_samples += 1
+                self._discarded_samples += trimmed
+                self._buffer.clear()
+                self._pause_trim_pending = False
+            return
+
+        elapsed_since_resume = pc_timestamp_ms - self._resume_time_ms
+        if self._resume_time_ms > 0 and elapsed_since_resume < self.LABEL_SWITCH_DISCARD_MS:
+            self._discarded_samples += 1
+            return
+
+        self._buffer.append((sample, self.current_label))
+        if len(self._buffer) > 1000:
+            for s, l in self._buffer[:500]:
+                self.writer.write_sample(s, l)
+                self.total_samples += 1
+            self._buffer = self._buffer[500:]
+
+    def _flush_buffer(self) -> None:
+        if not self._buffer:
+            return
+        cutoff_ms = self._buffer[-1][0].pc_timestamp_ms - self.LABEL_SWITCH_DISCARD_MS
+        trimmed = 0
+        for s, l in self._buffer:
+            if s.pc_timestamp_ms <= cutoff_ms:
+                self.writer.write_sample(s, l)
+                self.total_samples += 1
+            else:
+                trimmed += 1
+        self._discarded_samples += trimmed
+        self._buffer.clear()
 
     def _print_periodic_status(self) -> None:
         now = time.monotonic()
@@ -333,12 +381,19 @@ class CollectorApp:
     def _print_status(self, full: bool) -> None:
         serial_state = "open" if self.serial_reader.is_open else "closed"
         collecting_text = "ON" if self.collecting else "OFF"
+        discard_active = ""
+        if self.collecting and self._resume_time_ms > 0:
+            elapsed = int(time.time() * 1000) - self._resume_time_ms
+            if elapsed < self.LABEL_SWITCH_DISCARD_MS:
+                remaining = (self.LABEL_SWITCH_DISCARD_MS - elapsed) / 1000.0
+                discard_active = f" [DISCARD {remaining:.1f}s]"
         session_path = self.writer.current_path if self.writer.current_path is not None else "n/a"
         message = (
             f"[status] serial={serial_state} "
             f"collecting={collecting_text} "
-            f"label={self.current_label} "
+            f"label={self.current_label}{discard_active} "
             f"samples={self.total_samples} "
+            f"discarded={self._discarded_samples} "
             f"parse_errors={self.parse_error_count} "
             f"session={self.writer.session_id}"
         )
@@ -354,16 +409,22 @@ class CollectorApp:
 
     def _print_help(self) -> None:
         key_hints = {
-            "1": "ESC",
-            "2": "mouse_left",
-            "3": "W",
-            "4": "Shift+W",
-            "5": "SPACE",
-            "6": "Q",
-            "7": "hold mouse_left -> release",
+            "0": "无",
+            "1": "M (地图)",
+            "2": "鼠标左键 (普攻)",
+            "3": "Shift+W (冲刺)",
+            "4": "W (前进)",
+            "5": "切换角色",
+            "6": "ESC (菜单)",
+            "7": "Q (元素爆发)",
+            "8": "F (拾取/交互)",
+            "9": "长按重击",
+            "a": "SPACE (跳跃)",
+            "b": "视角转动",
+            "d": "E (元素战技)",
         }
         for key, label in DEFAULT_LABEL_MAP.items():
-            hint = key_hints.get(key)
+            hint = key_hints.get(key, "")
             if hint:
                 print(f"[keys] {key}={label} ({hint})")
             else:
