@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 #define RF_MODEL_TREE_COUNT 400
-#define RF_MODEL_NODE_COUNT 17200
+#define RF_MODEL_NODE_COUNT 25956
 #define RF_MODEL_FEATURE_COUNT 812
 #define RF_MODEL_CLASS_COUNT 10
 
