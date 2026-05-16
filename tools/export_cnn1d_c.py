@@ -28,13 +28,14 @@ WINDOW_SIZE = 25
 class IMU1DCNN(nn.Module):
     def __init__(self, num_channels: int, num_classes: int, window_size: int = 25):
         super().__init__()
-        self.conv1 = nn.Conv1d(num_channels, 32, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv1d(num_channels, 32, kernel_size=7, padding=3)
         self.bn1 = nn.BatchNorm1d(32)
-        self.conv2 = nn.Conv1d(32, 64, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv1d(32, 64, kernel_size=5, padding=2)
         self.bn2 = nn.BatchNorm1d(64)
         self.conv3 = nn.Conv1d(64, 64, kernel_size=3, padding=1)
         self.bn3 = nn.BatchNorm1d(64)
         self.pool = nn.AdaptiveAvgPool1d(1)
+        self.dropout = nn.Dropout(0.3)
         self.fc = nn.Linear(64, num_classes)
 
     def forward(self, x):
@@ -102,6 +103,10 @@ def export_model(model_pt_path: Path, meta_path: Path, norm_path: Path,
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Generate header
+    conv1_kernel = model.conv1.kernel_size[0]
+    conv2_kernel = model.conv2.kernel_size[0]
+    conv3_kernel = model.conv3.kernel_size[0]
+
     header = "\n".join([
         "#pragma once",
         "",
@@ -113,15 +118,17 @@ def export_model(model_pt_path: Path, meta_path: Path, norm_path: Path,
         f"#define CNN1D_CONV1_OUT 32",
         f"#define CNN1D_CONV2_OUT 64",
         f"#define CNN1D_CONV3_OUT 64",
-        f"#define CNN1D_KERNEL_SIZE 3",
+        f"#define CNN1D_CONV1_KERNEL {conv1_kernel}",
+        f"#define CNN1D_CONV2_KERNEL {conv2_kernel}",
+        f"#define CNN1D_CONV3_KERNEL {conv3_kernel}",
         "",
         "extern const float cnn1d_norm_mean[CNN1D_NUM_CHANNELS];",
         "extern const float cnn1d_norm_inv_std[CNN1D_NUM_CHANNELS];",
-        "extern const float cnn1d_conv1_w[CNN1D_CONV1_OUT * CNN1D_NUM_CHANNELS * CNN1D_KERNEL_SIZE];",
+        "extern const float cnn1d_conv1_w[CNN1D_CONV1_OUT * CNN1D_NUM_CHANNELS * CNN1D_CONV1_KERNEL];",
         "extern const float cnn1d_conv1_b[CNN1D_CONV1_OUT];",
-        "extern const float cnn1d_conv2_w[CNN1D_CONV2_OUT * CNN1D_CONV1_OUT * CNN1D_KERNEL_SIZE];",
+        "extern const float cnn1d_conv2_w[CNN1D_CONV2_OUT * CNN1D_CONV1_OUT * CNN1D_CONV2_KERNEL];",
         "extern const float cnn1d_conv2_b[CNN1D_CONV2_OUT];",
-        "extern const float cnn1d_conv3_w[CNN1D_CONV3_OUT * CNN1D_CONV2_OUT * CNN1D_KERNEL_SIZE];",
+        "extern const float cnn1d_conv3_w[CNN1D_CONV3_OUT * CNN1D_CONV2_OUT * CNN1D_CONV3_KERNEL];",
         "extern const float cnn1d_conv3_b[CNN1D_CONV3_OUT];",
         "extern const float cnn1d_fc_w[CNN1D_NUM_CLASSES * CNN1D_CONV3_OUT];",
         "extern const float cnn1d_fc_b[CNN1D_NUM_CLASSES];",
@@ -169,6 +176,7 @@ def export_model(model_pt_path: Path, meta_path: Path, norm_path: Path,
         "conv2_shape": list(w2.shape),
         "conv3_shape": list(w3.shape),
         "fc_shape": list(fc_w.shape),
+        "kernel_sizes": [conv1_kernel, conv2_kernel, conv3_kernel],
     }
     print(json.dumps(summary, indent=2))
 

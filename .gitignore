@@ -25,7 +25,9 @@ logs/
 Thumbs.db
 data/
 output/
+output_cnn1d/
 model/
+main/generated/
 
 # 编辑器本地配置
 .vscode/
