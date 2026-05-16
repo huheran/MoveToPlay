@@ -35,9 +35,9 @@ static void build_normalized_input(float out[CNN1D_NUM_CHANNELS][CNN1D_WINDOW_SI
 static void conv1d_relu(const float *weights, const float *bias,
                         const float input[][CNN1D_WINDOW_SIZE],
                         float output[][CNN1D_WINDOW_SIZE],
-                        int in_channels, int out_channels, int time_len)
+                        int in_channels, int out_channels,
+                        int kernel_size, int time_len)
 {
-    const int kernel_size = CNN1D_KERNEL_SIZE;
     const int pad = kernel_size / 2;
 
     for (int oc = 0; oc < out_channels; oc++) {
@@ -121,17 +121,20 @@ bool cnn_infer_push_frame(const cnn_infer_node_sample_t nodes[CNN_INFER_NODE_COU
     /* Conv1: (24, 25) -> (32, 25) */
     conv1d_relu(cnn1d_conv1_w, cnn1d_conv1_b,
                 normalized, s_conv_out,
-                CNN1D_NUM_CHANNELS, CNN1D_CONV1_OUT, CNN1D_WINDOW_SIZE);
+                CNN1D_NUM_CHANNELS, CNN1D_CONV1_OUT,
+                CNN1D_CONV1_KERNEL, CNN1D_WINDOW_SIZE);
 
     /* Conv2: (32, 25) -> (64, 25) */
     conv1d_relu(cnn1d_conv2_w, cnn1d_conv2_b,
                 (const float (*)[CNN1D_WINDOW_SIZE])s_conv_out, s_conv_tmp,
-                CNN1D_CONV1_OUT, CNN1D_CONV2_OUT, CNN1D_WINDOW_SIZE);
+                CNN1D_CONV1_OUT, CNN1D_CONV2_OUT,
+                CNN1D_CONV2_KERNEL, CNN1D_WINDOW_SIZE);
 
     /* Conv3: (64, 25) -> (64, 25) */
     conv1d_relu(cnn1d_conv3_w, cnn1d_conv3_b,
                 (const float (*)[CNN1D_WINDOW_SIZE])s_conv_tmp, s_conv_out,
-                CNN1D_CONV2_OUT, CNN1D_CONV3_OUT, CNN1D_WINDOW_SIZE);
+                CNN1D_CONV2_OUT, CNN1D_CONV3_OUT,
+                CNN1D_CONV3_KERNEL, CNN1D_WINDOW_SIZE);
 
     /* AvgPool: (64, 25) -> (64,) */
     float pooled[CNN1D_CONV3_OUT];

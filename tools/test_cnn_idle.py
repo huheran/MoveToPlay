@@ -10,13 +10,14 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 class IMU1DCNN(nn.Module):
     def __init__(self, nc, ncl, ws=25):
         super().__init__()
-        self.conv1 = nn.Conv1d(nc, 32, 3, padding=1)
+        self.conv1 = nn.Conv1d(nc, 32, 7, padding=3)
         self.bn1 = nn.BatchNorm1d(32)
-        self.conv2 = nn.Conv1d(32, 64, 3, padding=1)
+        self.conv2 = nn.Conv1d(32, 64, 5, padding=2)
         self.bn2 = nn.BatchNorm1d(64)
         self.conv3 = nn.Conv1d(64, 64, 3, padding=1)
         self.bn3 = nn.BatchNorm1d(64)
         self.pool = nn.AdaptiveAvgPool1d(1)
+        self.dropout = nn.Dropout(0.3)
         self.fc = nn.Linear(64, ncl)
 
     def forward(self, x):

@@ -46,17 +46,23 @@ WINDOW_SIZE = 25
 
 
 class IMU1DCNN(nn.Module):
-    """Lightweight 1D CNN for IMU action recognition on ESP32-S3."""
+    """Lightweight 1D CNN for IMU action recognition on ESP32-S3.
 
-    def __init__(self, num_channels: int, num_classes: int, window_size: int = 25):
+    Decreasing kernel sizes (7, 5, 3) give a receptive field of 13 frames,
+    covering 52% of the 25-frame window.
+    """
+
+    def __init__(self, num_channels: int, num_classes: int, window_size: int = 25,
+                 dropout: float = 0.3):
         super().__init__()
-        self.conv1 = nn.Conv1d(num_channels, 32, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv1d(num_channels, 32, kernel_size=7, padding=3)
         self.bn1 = nn.BatchNorm1d(32)
-        self.conv2 = nn.Conv1d(32, 64, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv1d(32, 64, kernel_size=5, padding=2)
         self.bn2 = nn.BatchNorm1d(64)
         self.conv3 = nn.Conv1d(64, 64, kernel_size=3, padding=1)
         self.bn3 = nn.BatchNorm1d(64)
         self.pool = nn.AdaptiveAvgPool1d(1)
+        self.dropout = nn.Dropout(dropout)
         self.fc = nn.Linear(64, num_classes)
 
     def forward(self, x):
@@ -65,6 +71,7 @@ class IMU1DCNN(nn.Module):
         x = F.relu(self.bn2(self.conv2(x)))
         x = F.relu(self.bn3(self.conv3(x)))
         x = self.pool(x).squeeze(-1)
+        x = self.dropout(x)
         return self.fc(x)
 
 
@@ -172,6 +179,30 @@ def build_windows(sync_df: pd.DataFrame, window_size: int, step_size: int,
 
 
 # ---------------------------------------------------------------------------
+# Data augmentation
+# ---------------------------------------------------------------------------
+
+def augment_batch(x: torch.Tensor) -> torch.Tensor:
+    """Apply random augmentations to a batch of (B, C, T) tensors."""
+    # Time shift: roll by random offset [-3, +3]
+    if torch.rand(1).item() < 0.5:
+        shift = torch.randint(-3, 4, (1,)).item()
+        x = torch.roll(x, shifts=shift, dims=2)
+
+    # Additive Gaussian noise
+    if torch.rand(1).item() < 0.5:
+        x = x + torch.randn_like(x) * 0.05
+
+    # Channel-wise scaling: multiply each channel by uniform [0.9, 1.1]
+    if torch.rand(1).item() < 0.5:
+        B, C, T = x.shape
+        scale = 0.9 + 0.2 * torch.rand(1, C, 1, device=x.device)
+        x = x * scale
+
+    return x
+
+
+# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
@@ -196,19 +227,24 @@ def train_model(X_train, y_train, X_test, y_test, class_names, args):
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = IMU1DCNN(NUM_CHANNELS, num_classes, WINDOW_SIZE).to(device)
+    model = IMU1DCNN(NUM_CHANNELS, num_classes, WINDOW_SIZE,
+                     dropout=args.dropout).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=args.epochs, eta_min=1e-5)
     criterion = nn.CrossEntropyLoss(weight=weight_tensor.to(device))
 
     print(f"\nTraining on {device}, {len(X_train)} train / {len(X_test)} test samples")
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     best_acc = 0.0
+    best_state = None
     for epoch in range(args.epochs):
         model.train()
         total_loss = 0.0
         for batch_x, batch_y in train_loader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+            batch_x = augment_batch(batch_x)
             optimizer.zero_grad()
             output = model(batch_x)
             loss = criterion(output, batch_y)
@@ -216,6 +252,7 @@ def train_model(X_train, y_train, X_test, y_test, class_names, args):
             optimizer.step()
             total_loss += loss.item() * batch_x.size(0)
 
+        scheduler.step()
         avg_loss = total_loss / len(X_train)
 
         # Evaluate
@@ -233,10 +270,16 @@ def train_model(X_train, y_train, X_test, y_test, class_names, args):
         acc = correct / total
         if acc > best_acc:
             best_acc = acc
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
         if (epoch + 1) % 10 == 0 or epoch == 0:
-            print(f"  Epoch {epoch+1:3d}/{args.epochs}: loss={avg_loss:.4f} acc={acc:.4f}")
+            print(f"  Epoch {epoch+1:3d}/{args.epochs}: loss={avg_loss:.4f} acc={acc:.4f} lr={scheduler.get_last_lr()[0]:.6f}")
 
     print(f"\nBest test accuracy: {best_acc:.4f}")
+
+    # Load best model state
+    if best_state is not None:
+        model.load_state_dict(best_state)
+        model.to(device)
 
     # Final evaluation
     model.eval()
@@ -281,6 +324,8 @@ def export_onnx(model, output_dir: Path, class_names: list[str]):
         "num_channels": NUM_CHANNELS,
         "window_size": WINDOW_SIZE,
         "input_shape": [1, NUM_CHANNELS, WINDOW_SIZE],
+        "kernel_sizes": [7, 5, 3],
+        "conv_channels": [32, 64, 64],
     }
     meta_path = output_dir / "cnn1d_model_meta.json"
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -301,8 +346,9 @@ def main() -> int:
     parser.add_argument("--group-chunk-frames", type=int, default=200)
     parser.add_argument("--test-size", type=float, default=0.25)
     parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--epochs", type=int, default=300)
+    parser.add_argument("--lr", type=float, default=0.002)
+    parser.add_argument("--dropout", type=float, default=0.3)
     parser.add_argument("--output-dir", default="output_cnn1d")
     args = parser.parse_args()
 
