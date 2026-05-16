@@ -48,18 +48,19 @@ WINDOW_SIZE = 25
 class IMU1DCNN(nn.Module):
     """Lightweight 1D CNN for IMU action recognition on ESP32-S3.
 
-    Decreasing kernel sizes (7, 5, 3) give a receptive field of 13 frames,
-    covering 52% of the 25-frame window.
+    Dilated convolutions give a receptive field of 21 frames (840ms)
+    covering 84% of the 25-frame window without adding layers.
+    RF = 1 + (5-1)*1 + (5-1)*2 + (3-1)*4 = 21
     """
 
     def __init__(self, num_channels: int, num_classes: int, window_size: int = 25,
                  dropout: float = 0.3):
         super().__init__()
-        self.conv1 = nn.Conv1d(num_channels, 32, kernel_size=7, padding=3)
+        self.conv1 = nn.Conv1d(num_channels, 32, kernel_size=5, padding=2, dilation=1)
         self.bn1 = nn.BatchNorm1d(32)
-        self.conv2 = nn.Conv1d(32, 64, kernel_size=5, padding=2)
+        self.conv2 = nn.Conv1d(32, 64, kernel_size=5, padding=4, dilation=2)
         self.bn2 = nn.BatchNorm1d(64)
-        self.conv3 = nn.Conv1d(64, 64, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv1d(64, 64, kernel_size=3, padding=4, dilation=4)
         self.bn3 = nn.BatchNorm1d(64)
         self.pool = nn.AdaptiveAvgPool1d(1)
         self.dropout = nn.Dropout(dropout)
