@@ -15,6 +15,7 @@
 #include "m2p_espnow.h"
 #include "rf_infer.h"
 #include "cnn_infer.h"
+#include "cnn_infer_int8.h"
 #include "usb_keyboard.h"
 #include "battery_monitor.h"
 #include "status_led.h"
@@ -67,6 +68,7 @@ static const char *TAG = "imu_main";
 #define DONGLE_ENABLE_SERIAL_AGE_COLUMN   1
 #define DONGLE_ENABLE_RF_INFERENCE        0
 #define DONGLE_USE_CNN_INFER              0
+#define DONGLE_USE_CNN_INT8               0
 #define DONGLE_ENABLE_USB_KEYBOARD        0
 #define DONGLE_ENABLE_USB_MOUSE           0
 #define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
@@ -77,6 +79,7 @@ static const char *TAG = "imu_main";
 #define DONGLE_ENABLE_SERIAL_AGE_COLUMN   1
 #define DONGLE_ENABLE_RF_INFERENCE        1
 #define DONGLE_USE_CNN_INFER              1
+#define DONGLE_USE_CNN_INT8               1
 #define DONGLE_ENABLE_USB_KEYBOARD        1
 #define DONGLE_ENABLE_USB_MOUSE           1
 #define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
@@ -436,23 +439,30 @@ typedef struct {
 } dongle_key_action_t;
 
 #if DONGLE_USE_CNN_INFER
-/* CNN class order: idle(0), right_hand_raise(1), right_hand_slash(2), walk(3),
-   run(4), jump(5), hands_cross_chest(6), hands_chest_push(7),
-   left_hand_raise(8), both_hands_raise(9) */
-static const dongle_key_action_t s_class_key_actions[CNN1D_NUM_CLASSES] = {
-    [0] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                              /* idle */
-    [1] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_M, TRIGGER_SUSTAIN, 0, 25 },                   /* right_hand_raise -> M */
-    [2] = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_COOLDOWN, 400, 0 },                     /* right_hand_slash -> 鼠标左键 */
-    [3] = { ACTION_TYPE_KEY_HOLD, 0, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 },                  /* walk */
-    [4] = { ACTION_TYPE_KEY_HOLD, USB_KEYBOARD_MOD_LEFT_SHIFT, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 }, /* run */
-    [5] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 3000, 0 },                /* jump */
-    [6] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_E, TRIGGER_COOLDOWN, 1000, 0 },                /* hands_cross_chest -> E */
-    [7] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_Q, TRIGGER_COOLDOWN, 2000, 0 },                /* hands_chest_push -> Q */
-    [8] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_ESCAPE, TRIGGER_SUSTAIN, 0, 25 },              /* left_hand_raise -> ESC */
-    [9] = { ACTION_TYPE_MOUSE_MOVE_LEFT, 0, 0, TRIGGER_SUSTAIN, 0, 25 },                   /* both_hands_raise -> 鼠标左移 */
-};
+/* CNN class order: idle(0), right_hand_raise(1), right_hand_slash(2), run(3),
+   walk(4), hands_cross_forehead(5), left_hand_raise(6), ultraman_beam(7),
+   hands_press_down(8), kick(9), jump(10), turn_body(11), hands_shoot(12) */
+#if DONGLE_USE_CNN_INT8
+#define DONGLE_NUM_CLASSES CNN1D_INT8_NUM_CLASSES
+#else
 #define DONGLE_NUM_CLASSES CNN1D_NUM_CLASSES
+#endif
 #define DONGLE_IDLE_CLASS 0
+static const dongle_key_action_t s_class_key_actions[DONGLE_NUM_CLASSES] = {
+    [0]  = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                              /* idle */
+    [1]  = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_M, TRIGGER_SUSTAIN, 0, 25 },                   /* right_hand_raise -> M */
+    [2]  = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_COOLDOWN, 400, 0 },                     /* right_hand_slash -> 鼠标左键 */
+    [3]  = { ACTION_TYPE_KEY_HOLD, USB_KEYBOARD_MOD_LEFT_SHIFT, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 }, /* run */
+    [4]  = { ACTION_TYPE_KEY_HOLD, 0, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 },                  /* walk */
+    [5]  = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_E, TRIGGER_COOLDOWN, 1000, 0 },                /* hands_cross_forehead -> E */
+    [6]  = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_ESCAPE, TRIGGER_SUSTAIN, 0, 25 },              /* left_hand_raise -> ESC */
+    [7]  = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_Q, TRIGGER_COOLDOWN, 2000, 0 },                /* ultraman_beam -> Q */
+    [8]  = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_F, TRIGGER_COOLDOWN, 1000, 0 },                /* hands_press_down -> F */
+    [9]  = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 3000, 0 },                /* kick -> SPACE */
+    [10] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 3000, 0 },                /* jump -> SPACE */
+    [11] = { ACTION_TYPE_MOUSE_MOVE_LEFT, 0, 0, TRIGGER_SUSTAIN, 0, 25 },                   /* turn_body -> 鼠标左移 */
+    [12] = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_COOLDOWN, 400, 0 },                     /* hands_shoot -> 鼠标左键 */
+};
 #else
 /* RF class order: both_hands_raise(0), hands_chest_push(1), hands_cross_chest(2),
    idle(3), jump(4), left_hand_raise(5), right_hand_raise(6),
@@ -480,7 +490,7 @@ static uint8_t s_dongle_pending_count = 0;
 
 static int64_t s_dongle_last_fire_us[DONGLE_NUM_CLASSES] = {0};
 static bool s_dongle_edge_armed[DONGLE_NUM_CLASSES] = {
-    true, true, true, true, true, true, true, true, true, true
+    true, true, true, true, true, true, true, true, true, true, true, true, true
 };
 static uint16_t s_dongle_sustain_count[DONGLE_NUM_CLASSES] = {0};
 
@@ -662,6 +672,29 @@ static void dongle_run_rf_inference(int64_t now_us)
     }
 
 #if DONGLE_USE_CNN_INFER
+#if DONGLE_USE_CNN_INT8
+    cnn_int8_infer_node_sample_t cnn_frame[CNN_INT8_INFER_NODE_COUNT];
+    for (int i = 0; i < CNN_INT8_INFER_NODE_COUNT; i++) {
+        cnn_frame[i].ax = frame[i].ax;
+        cnn_frame[i].ay = frame[i].ay;
+        cnn_frame[i].az = frame[i].az;
+        cnn_frame[i].gx = frame[i].gx;
+        cnn_frame[i].gy = frame[i].gy;
+        cnn_frame[i].gz = frame[i].gz;
+    }
+
+    cnn_int8_infer_result_t cnn_result = {0};
+    const int64_t infer_start_us = esp_timer_get_time();
+    if (!cnn_int8_infer_push_frame(cnn_frame, &cnn_result) || !cnn_result.valid) {
+        return;
+    }
+    const int64_t infer_elapsed_us = esp_timer_get_time() - infer_start_us;
+
+    const uint8_t result_class = cnn_result.class_index;
+    const float result_confidence = cnn_result.confidence;
+    const char *result_label = cnn_result.label;
+    const uint32_t result_frames = cnn_result.frame_count;
+#else
     cnn_infer_node_sample_t cnn_frame[CNN_INFER_NODE_COUNT];
     for (int i = 0; i < CNN_INFER_NODE_COUNT; i++) {
         cnn_frame[i].ax = frame[i].ax;
@@ -683,6 +716,7 @@ static void dongle_run_rf_inference(int64_t now_us)
     const float result_confidence = cnn_result.confidence;
     const char *result_label = cnn_result.label;
     const uint32_t result_frames = cnn_result.frame_count;
+#endif
 #else
     rf_infer_result_t result = {0};
     const int64_t infer_start_us = esp_timer_get_time();
