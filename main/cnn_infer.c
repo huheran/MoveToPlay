@@ -36,16 +36,15 @@ static void conv1d_relu(const float *weights, const float *bias,
                         const float input[][CNN1D_WINDOW_SIZE],
                         float output[][CNN1D_WINDOW_SIZE],
                         int in_channels, int out_channels,
-                        int kernel_size, int time_len)
+                        int kernel_size, int dilation, int padding,
+                        int time_len)
 {
-    const int pad = kernel_size / 2;
-
     for (int oc = 0; oc < out_channels; oc++) {
         for (int t = 0; t < time_len; t++) {
             float sum = bias[oc];
             for (int ic = 0; ic < in_channels; ic++) {
                 for (int k = 0; k < kernel_size; k++) {
-                    int ti = t + k - pad;
+                    int ti = t + k * dilation - padding;
                     if (ti >= 0 && ti < time_len) {
                         int w_idx = (oc * in_channels + ic) * kernel_size + k;
                         sum += weights[w_idx] * input[ic][ti];
@@ -118,23 +117,26 @@ bool cnn_infer_push_frame(const cnn_infer_node_sample_t nodes[CNN_INFER_NODE_COU
     float normalized[CNN1D_NUM_CHANNELS][CNN1D_WINDOW_SIZE];
     build_normalized_input(normalized);
 
-    /* Conv1: (24, 25) -> (32, 25) */
+    /* Conv1: (24, 25) -> (32, 25), k=5, d=1 */
     conv1d_relu(cnn1d_conv1_w, cnn1d_conv1_b,
                 normalized, s_conv_out,
                 CNN1D_NUM_CHANNELS, CNN1D_CONV1_OUT,
-                CNN1D_CONV1_KERNEL, CNN1D_WINDOW_SIZE);
+                CNN1D_CONV1_KERNEL, CNN1D_CONV1_DILATION, CNN1D_CONV1_PADDING,
+                CNN1D_WINDOW_SIZE);
 
-    /* Conv2: (32, 25) -> (64, 25) */
+    /* Conv2: (32, 25) -> (64, 25), k=5, d=2 */
     conv1d_relu(cnn1d_conv2_w, cnn1d_conv2_b,
                 (const float (*)[CNN1D_WINDOW_SIZE])s_conv_out, s_conv_tmp,
                 CNN1D_CONV1_OUT, CNN1D_CONV2_OUT,
-                CNN1D_CONV2_KERNEL, CNN1D_WINDOW_SIZE);
+                CNN1D_CONV2_KERNEL, CNN1D_CONV2_DILATION, CNN1D_CONV2_PADDING,
+                CNN1D_WINDOW_SIZE);
 
-    /* Conv3: (64, 25) -> (64, 25) */
+    /* Conv3: (64, 25) -> (64, 25), k=3, d=4 */
     conv1d_relu(cnn1d_conv3_w, cnn1d_conv3_b,
                 (const float (*)[CNN1D_WINDOW_SIZE])s_conv_tmp, s_conv_out,
                 CNN1D_CONV2_OUT, CNN1D_CONV3_OUT,
-                CNN1D_CONV3_KERNEL, CNN1D_WINDOW_SIZE);
+                CNN1D_CONV3_KERNEL, CNN1D_CONV3_DILATION, CNN1D_CONV3_PADDING,
+                CNN1D_WINDOW_SIZE);
 
     /* AvgPool: (64, 25) -> (64,) */
     float pooled[CNN1D_CONV3_OUT];

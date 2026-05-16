@@ -28,11 +28,11 @@ WINDOW_SIZE = 25
 class IMU1DCNN(nn.Module):
     def __init__(self, num_channels: int, num_classes: int, window_size: int = 25):
         super().__init__()
-        self.conv1 = nn.Conv1d(num_channels, 32, kernel_size=7, padding=3)
+        self.conv1 = nn.Conv1d(num_channels, 32, kernel_size=5, padding=2, dilation=1)
         self.bn1 = nn.BatchNorm1d(32)
-        self.conv2 = nn.Conv1d(32, 64, kernel_size=5, padding=2)
+        self.conv2 = nn.Conv1d(32, 64, kernel_size=5, padding=4, dilation=2)
         self.bn2 = nn.BatchNorm1d(64)
-        self.conv3 = nn.Conv1d(64, 64, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv1d(64, 64, kernel_size=3, padding=4, dilation=4)
         self.bn3 = nn.BatchNorm1d(64)
         self.pool = nn.AdaptiveAvgPool1d(1)
         self.dropout = nn.Dropout(0.3)
@@ -106,6 +106,12 @@ def export_model(model_pt_path: Path, meta_path: Path, norm_path: Path,
     conv1_kernel = model.conv1.kernel_size[0]
     conv2_kernel = model.conv2.kernel_size[0]
     conv3_kernel = model.conv3.kernel_size[0]
+    conv1_dilation = model.conv1.dilation[0]
+    conv2_dilation = model.conv2.dilation[0]
+    conv3_dilation = model.conv3.dilation[0]
+    conv1_padding = model.conv1.padding[0]
+    conv2_padding = model.conv2.padding[0]
+    conv3_padding = model.conv3.padding[0]
 
     header = "\n".join([
         "#pragma once",
@@ -121,6 +127,12 @@ def export_model(model_pt_path: Path, meta_path: Path, norm_path: Path,
         f"#define CNN1D_CONV1_KERNEL {conv1_kernel}",
         f"#define CNN1D_CONV2_KERNEL {conv2_kernel}",
         f"#define CNN1D_CONV3_KERNEL {conv3_kernel}",
+        f"#define CNN1D_CONV1_DILATION {conv1_dilation}",
+        f"#define CNN1D_CONV2_DILATION {conv2_dilation}",
+        f"#define CNN1D_CONV3_DILATION {conv3_dilation}",
+        f"#define CNN1D_CONV1_PADDING {conv1_padding}",
+        f"#define CNN1D_CONV2_PADDING {conv2_padding}",
+        f"#define CNN1D_CONV3_PADDING {conv3_padding}",
         "",
         "extern const float cnn1d_norm_mean[CNN1D_NUM_CHANNELS];",
         "extern const float cnn1d_norm_inv_std[CNN1D_NUM_CHANNELS];",
