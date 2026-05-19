@@ -5,14 +5,16 @@
 #include <string.h>
 
 #define CNN_INT8_CH_PER_NODE 6
+#define PADDED_TIME (CNN1D_INT8_WINDOW_SIZE + 24)
 
 static float s_input_buf[CNN1D_INT8_NUM_CHANNELS][CNN1D_INT8_WINDOW_SIZE];
 static uint8_t s_buf_head = 0;
 static uint8_t s_buf_count = 0;
 static uint32_t s_total_frames = 0;
 
-static int8_t s_act_buf_a[64][CNN1D_INT8_WINDOW_SIZE];
-static int8_t s_act_buf_b[64][CNN1D_INT8_WINDOW_SIZE];
+static int8_t s_act_buf_a[64][PADDED_TIME];
+static int8_t s_act_buf_b[64][PADDED_TIME];
+static float s_float_buf[64][CNN1D_INT8_WINDOW_SIZE];
 
 void cnn_int8_infer_reset(void)
 {
@@ -29,76 +31,49 @@ static inline int8_t clamp_to_int8(int32_t val)
     return (int8_t)val;
 }
 
-static inline int32_t round_to_int(float val)
-{
-    return (int32_t)(val >= 0.0f ? val + 0.5f : val - 0.5f);
-}
-
-static void conv1d_int8_relu_quantize(
+static void conv1d_int8_layer(
     const int8_t *weights,
     const float *bias,
     const float *w_scale,
     float input_act_scale,
     float output_act_scale,
-    const int8_t input[][CNN1D_INT8_WINDOW_SIZE],
-    int8_t output[][CNN1D_INT8_WINDOW_SIZE],
+    const int8_t *input,
+    int8_t *output,
     int in_channels, int out_channels,
     int kernel_size, int dilation, int padding,
-    int time_len)
+    int time_len, int input_stride, int output_stride,
+    int output_as_float, float *float_output)
 {
-    const float inv_out_scale = 1.0f / output_act_scale;
+    const float inv_out_scale = (output_act_scale > 0.0f) ? (1.0f / output_act_scale) : 0.0f;
 
     for (int oc = 0; oc < out_channels; oc++) {
         const float combined_scale = w_scale[oc] * input_act_scale;
+        const int oc_w_offset = oc * in_channels * kernel_size;
+
         for (int t = 0; t < time_len; t++) {
             int32_t acc = 0;
+
             for (int ic = 0; ic < in_channels; ic++) {
+                const int8_t *in_row = input + ic * input_stride + padding;
+                const int8_t *w_row = weights + oc_w_offset + ic * kernel_size;
+
                 for (int k = 0; k < kernel_size; k++) {
-                    int ti = t + k * dilation - padding;
-                    if (ti >= 0 && ti < time_len) {
-                        int w_idx = (oc * in_channels + ic) * kernel_size + k;
-                        acc += (int32_t)weights[w_idx] * (int32_t)input[ic][ti];
-                    }
+                    acc += (int32_t)w_row[k] * (int32_t)in_row[t + k * dilation];
                 }
             }
+
             float val = (float)acc * combined_scale + bias[oc];
             if (val < 0.0f) val = 0.0f;
-            output[oc][t] = clamp_to_int8(round_to_int(val * inv_out_scale));
-        }
-    }
-}
 
-static void conv1d_int8_relu_float(
-    const int8_t *weights,
-    const float *bias,
-    const float *w_scale,
-    float input_act_scale,
-    const int8_t input[][CNN1D_INT8_WINDOW_SIZE],
-    float output[][CNN1D_INT8_WINDOW_SIZE],
-    int in_channels, int out_channels,
-    int kernel_size, int dilation, int padding,
-    int time_len)
-{
-    for (int oc = 0; oc < out_channels; oc++) {
-        const float combined_scale = w_scale[oc] * input_act_scale;
-        for (int t = 0; t < time_len; t++) {
-            int32_t acc = 0;
-            for (int ic = 0; ic < in_channels; ic++) {
-                for (int k = 0; k < kernel_size; k++) {
-                    int ti = t + k * dilation - padding;
-                    if (ti >= 0 && ti < time_len) {
-                        int w_idx = (oc * in_channels + ic) * kernel_size + k;
-                        acc += (int32_t)weights[w_idx] * (int32_t)input[ic][ti];
-                    }
-                }
+            if (output_as_float) {
+                float_output[oc * time_len + t] = val;
+            } else {
+                output[oc * output_stride + t + padding] =
+                    clamp_to_int8((int32_t)(val * inv_out_scale + 0.5f));
             }
-            float val = (float)acc * combined_scale + bias[oc];
-            output[oc][t] = val > 0.0f ? val : 0.0f;
         }
     }
 }
-
-// --- PLACEHOLDER_PUSH_FRAME ---
 
 bool cnn_int8_infer_push_frame(const cnn_int8_infer_node_sample_t nodes[CNN_INT8_INFER_NODE_COUNT],
                                cnn_int8_infer_result_t *out_result)
@@ -130,55 +105,57 @@ bool cnn_int8_infer_push_frame(const cnn_int8_infer_node_sample_t nodes[CNN_INT8
         return false;
     }
 
-    /* Normalize and quantize input to int8 */
+    const int T = CNN1D_INT8_WINDOW_SIZE;
+
+    /* Normalize input and quantize to int8, with padding zeros */
+    memset(s_act_buf_a, 0, sizeof(s_act_buf_a));
     const float inv_input_scale = 1.0f / cnn1d_int8_input_scale;
     for (uint8_t ch = 0; ch < CNN1D_INT8_NUM_CHANNELS; ch++) {
-        for (uint8_t t = 0; t < CNN1D_INT8_WINDOW_SIZE; t++) {
-            uint8_t phys = (uint8_t)((s_buf_head + t) % CNN1D_INT8_WINDOW_SIZE);
+        for (uint8_t t = 0; t < T; t++) {
+            uint8_t phys = (uint8_t)((s_buf_head + t) % T);
             float normalized = (s_input_buf[ch][phys] - cnn1d_int8_norm_mean[ch])
                              * cnn1d_int8_norm_inv_std[ch];
-            s_act_buf_a[ch][t] = clamp_to_int8(round_to_int(normalized * inv_input_scale));
+            int32_t q = (int32_t)(normalized * inv_input_scale + (normalized >= 0 ? 0.5f : -0.5f));
+            s_act_buf_a[ch][CNN1D_INT8_CONV1_PADDING + t] = clamp_to_int8(q);
         }
     }
 
-    /* Conv1: int8 -> int8 */
-    conv1d_int8_relu_quantize(
+    /* Conv1: int8 -> int8 (padded) */
+    memset(s_act_buf_b, 0, sizeof(s_act_buf_b));
+    conv1d_int8_layer(
         cnn1d_int8_conv1_w, cnn1d_int8_conv1_bias, cnn1d_int8_conv1_w_scale,
         cnn1d_int8_input_scale, cnn1d_int8_conv1_out_scale,
-        (const int8_t (*)[CNN1D_INT8_WINDOW_SIZE])s_act_buf_a,
-        s_act_buf_b,
+        (const int8_t *)s_act_buf_a, (int8_t *)s_act_buf_b,
         CNN1D_INT8_NUM_CHANNELS, CNN1D_INT8_CONV1_OUT,
         CNN1D_INT8_CONV1_KERNEL, CNN1D_INT8_CONV1_DILATION, CNN1D_INT8_CONV1_PADDING,
-        CNN1D_INT8_WINDOW_SIZE);
+        T, PADDED_TIME, PADDED_TIME, 0, NULL);
 
-    /* Conv2: int8 -> int8 */
-    conv1d_int8_relu_quantize(
+    /* Conv2: int8 -> int8 (padded) */
+    memset(s_act_buf_a, 0, sizeof(s_act_buf_a));
+    conv1d_int8_layer(
         cnn1d_int8_conv2_w, cnn1d_int8_conv2_bias, cnn1d_int8_conv2_w_scale,
         cnn1d_int8_conv1_out_scale, cnn1d_int8_conv2_out_scale,
-        (const int8_t (*)[CNN1D_INT8_WINDOW_SIZE])s_act_buf_b,
-        s_act_buf_a,
+        (const int8_t *)s_act_buf_b, (int8_t *)s_act_buf_a,
         CNN1D_INT8_CONV1_OUT, CNN1D_INT8_CONV2_OUT,
         CNN1D_INT8_CONV2_KERNEL, CNN1D_INT8_CONV2_DILATION, CNN1D_INT8_CONV2_PADDING,
-        CNN1D_INT8_WINDOW_SIZE);
+        T, PADDED_TIME, PADDED_TIME, 0, NULL);
 
-    /* Conv3: int8 -> float (last conv, output to avg pool) */
-    float conv3_out[CNN1D_INT8_CONV3_OUT][CNN1D_INT8_WINDOW_SIZE];
-    conv1d_int8_relu_float(
+    /* Conv3: int8 -> float */
+    conv1d_int8_layer(
         cnn1d_int8_conv3_w, cnn1d_int8_conv3_bias, cnn1d_int8_conv3_w_scale,
-        cnn1d_int8_conv2_out_scale,
-        (const int8_t (*)[CNN1D_INT8_WINDOW_SIZE])s_act_buf_a,
-        conv3_out,
+        cnn1d_int8_conv2_out_scale, 0.0f,
+        (const int8_t *)s_act_buf_a, NULL,
         CNN1D_INT8_CONV2_OUT, CNN1D_INT8_CONV3_OUT,
         CNN1D_INT8_CONV3_KERNEL, CNN1D_INT8_CONV3_DILATION, CNN1D_INT8_CONV3_PADDING,
-        CNN1D_INT8_WINDOW_SIZE);
+        T, PADDED_TIME, 0, 1, (float *)s_float_buf);
 
     /* AvgPool: (64, 25) -> (64,) */
     float pooled[CNN1D_INT8_CONV3_OUT];
-    const float inv_t = 1.0f / (float)CNN1D_INT8_WINDOW_SIZE;
+    const float inv_t = 1.0f / (float)T;
     for (int ch = 0; ch < CNN1D_INT8_CONV3_OUT; ch++) {
         float sum = 0.0f;
-        for (int t = 0; t < CNN1D_INT8_WINDOW_SIZE; t++) {
-            sum += conv3_out[ch][t];
+        for (int t = 0; t < T; t++) {
+            sum += s_float_buf[ch][t];
         }
         pooled[ch] = sum * inv_t;
     }
