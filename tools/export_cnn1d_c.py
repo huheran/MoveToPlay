@@ -28,11 +28,11 @@ WINDOW_SIZE = 25
 class IMU1DCNN(nn.Module):
     def __init__(self, num_channels: int, num_classes: int, window_size: int = 25):
         super().__init__()
-        self.conv1 = nn.Conv1d(num_channels, 32, kernel_size=5, padding=2, dilation=1)
+        self.conv1 = nn.Conv1d(num_channels, 32, kernel_size=15, padding=7)
         self.bn1 = nn.BatchNorm1d(32)
-        self.conv2 = nn.Conv1d(32, 64, kernel_size=5, padding=4, dilation=2)
+        self.conv2 = nn.Conv1d(32, 64, kernel_size=5, padding=2)
         self.bn2 = nn.BatchNorm1d(64)
-        self.conv3 = nn.Conv1d(64, 64, kernel_size=3, padding=4, dilation=4)
+        self.conv3 = nn.Conv1d(64, 64, kernel_size=3, padding=1)
         self.bn3 = nn.BatchNorm1d(64)
         self.pool = nn.AdaptiveAvgPool1d(1)
         self.dropout = nn.Dropout(0.3)
