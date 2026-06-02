@@ -123,7 +123,7 @@ static const char *TAG = "imu_main";
 #define DONGLE_MAX_TRACKER_NODES      8
 #define DONGLE_RF_MAX_NODE_AGE_MS     250
 #define DONGLE_RF_PRINT_INTERVAL_MS   120
-#define DONGLE_RF_MIN_CONFIDENCE      0.35f
+#define DONGLE_RF_MIN_CONFIDENCE      0.90f
 
 #define BATTERY_REPORT_INTERVAL_MS    5000
 
@@ -402,10 +402,11 @@ static void dongle_print_latest_states(void)
 #if DONGLE_ENABLE_USB_KEYBOARD
 #define DONGLE_KEY_TAP_HOLD_MS        80
 #define DONGLE_MOUSE_MOVE_DELTA       60
-#define DONGLE_CONFIRM_FRAMES         3
+#define DONGLE_CONFIRM_FRAMES         5
 #define DONGLE_INFER_RATE_HZ          25
 
 #define HID_KEY_E       0x08
+#define HID_KEY_F       0x09
 #define HID_KEY_M       0x10
 #define HID_KEY_Q       0x14
 #define HID_KEY_W       0x1A
@@ -436,17 +437,25 @@ typedef struct {
 } dongle_key_action_t;
 
 #if DONGLE_USE_CNN_INFER
-/* CNN class order: idle(0), right_hand_raise(1), right_hand_slash(2),
-   run(3), walk(4), left_hand_raise(5) */
+/* CNN class order: idle(0), right_hand_raise(1), right_hand_slash(2), run(3),
+   walk(4), hands_cross_forehead(5), left_hand_raise(6), ultraman_beam(7),
+   hands_press_down(8), kick(9), jump(10), turn_body(11), hands_shoot(12) */
 #define DONGLE_NUM_CLASSES CNN1D_NUM_CLASSES
 #define DONGLE_IDLE_CLASS 0
 static const dongle_key_action_t s_class_key_actions[DONGLE_NUM_CLASSES] = {
-    [0] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                              /* idle */
-    [1] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_M, TRIGGER_SUSTAIN, 0, 25 },                   /* right_hand_raise -> M */
-    [2] = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_COOLDOWN, 400, 0 },                     /* right_hand_slash -> 鼠标左键 */
-    [3] = { ACTION_TYPE_KEY_HOLD, USB_KEYBOARD_MOD_LEFT_SHIFT, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 }, /* run */
-    [4] = { ACTION_TYPE_KEY_HOLD, 0, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 },                  /* walk */
-    [5] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_ESCAPE, TRIGGER_SUSTAIN, 0, 25 },              /* left_hand_raise -> ESC */
+    [0]  = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                              /* idle */
+    [1]  = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_M, TRIGGER_SUSTAIN, 0, 25 },                   /* right_hand_raise -> M */
+    [2]  = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_COOLDOWN, 400, 0 },                     /* right_hand_slash -> 鼠标左键 */
+    [3]  = { ACTION_TYPE_KEY_HOLD, USB_KEYBOARD_MOD_LEFT_SHIFT, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 }, /* run */
+    [4]  = { ACTION_TYPE_KEY_HOLD, 0, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 },                  /* walk */
+    [5]  = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_E, TRIGGER_COOLDOWN, 1000, 0 },                /* hands_cross_forehead -> E */
+    [6]  = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_ESCAPE, TRIGGER_SUSTAIN, 0, 25 },              /* left_hand_raise -> ESC */
+    [7]  = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_Q, TRIGGER_COOLDOWN, 2000, 0 },                /* ultraman_beam -> Q */
+    [8]  = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_F, TRIGGER_COOLDOWN, 1000, 0 },                /* hands_press_down -> F */
+    [9]  = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 3000, 0 },                /* kick -> SPACE */
+    [10] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 3000, 0 },                /* jump -> SPACE */
+    [11] = { ACTION_TYPE_MOUSE_MOVE_LEFT, 0, 0, TRIGGER_SUSTAIN, 0, 25 },                   /* turn_body -> 鼠标左移 */
+    [12] = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_COOLDOWN, 400, 0 },                     /* hands_shoot -> 鼠标左键 */
 };
 #else
 /* RF class order: both_hands_raise(0), hands_chest_push(1), hands_cross_chest(2),
@@ -475,7 +484,7 @@ static uint8_t s_dongle_pending_count = 0;
 
 static int64_t s_dongle_last_fire_us[DONGLE_NUM_CLASSES] = {0};
 static bool s_dongle_edge_armed[DONGLE_NUM_CLASSES] = {
-    true, true, true, true, true, true
+    true, true, true, true, true, true, true, true, true, true, true, true, true
 };
 static uint16_t s_dongle_sustain_count[DONGLE_NUM_CLASSES] = {0};
 

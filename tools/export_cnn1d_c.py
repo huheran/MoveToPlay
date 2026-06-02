@@ -28,15 +28,15 @@ WINDOW_SIZE = 25
 class IMU1DCNN(nn.Module):
     def __init__(self, num_channels: int, num_classes: int, window_size: int = 25):
         super().__init__()
-        self.conv1 = nn.Conv1d(num_channels, 32, kernel_size=15, padding=7)
+        self.conv1 = nn.Conv1d(num_channels, 32, kernel_size=7, padding=3)
         self.bn1 = nn.BatchNorm1d(32)
-        self.conv2 = nn.Conv1d(32, 64, kernel_size=5, padding=2)
-        self.bn2 = nn.BatchNorm1d(64)
-        self.conv3 = nn.Conv1d(64, 64, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm1d(64)
+        self.conv2 = nn.Conv1d(32, 32, kernel_size=5, padding=2)
+        self.bn2 = nn.BatchNorm1d(32)
+        self.conv3 = nn.Conv1d(32, 32, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm1d(32)
         self.pool = nn.AdaptiveAvgPool1d(1)
         self.dropout = nn.Dropout(0.3)
-        self.fc = nn.Linear(64, num_classes)
+        self.fc = nn.Linear(32, num_classes)
 
     def forward(self, x):
         x = torch.relu(self.bn1(self.conv1(x)))
@@ -121,9 +121,9 @@ def export_model(model_pt_path: Path, meta_path: Path, norm_path: Path,
         f"#define CNN1D_NUM_CHANNELS {NUM_CHANNELS}",
         f"#define CNN1D_WINDOW_SIZE {WINDOW_SIZE}",
         f"#define CNN1D_NUM_CLASSES {num_classes}",
-        f"#define CNN1D_CONV1_OUT 32",
-        f"#define CNN1D_CONV2_OUT 64",
-        f"#define CNN1D_CONV3_OUT 64",
+        f"#define CNN1D_CONV1_OUT {model.conv1.out_channels}",
+        f"#define CNN1D_CONV2_OUT {model.conv2.out_channels}",
+        f"#define CNN1D_CONV3_OUT {model.conv3.out_channels}",
         f"#define CNN1D_CONV1_KERNEL {conv1_kernel}",
         f"#define CNN1D_CONV2_KERNEL {conv2_kernel}",
         f"#define CNN1D_CONV3_KERNEL {conv3_kernel}",
