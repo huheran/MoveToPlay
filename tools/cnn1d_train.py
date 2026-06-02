@@ -81,7 +81,32 @@ class IMU1DCNN(nn.Module):
 # ---------------------------------------------------------------------------
 
 def load_data(csv_path: str) -> pd.DataFrame:
-    df = pd.read_csv(csv_path)
+    path = Path(csv_path)
+
+    # If path is a directory, load all CSVs in it and assign session_id by filename
+    if path.is_dir():
+        csv_files = sorted(path.glob("*.csv"))
+        if not csv_files:
+            raise FileNotFoundError(f"No CSV files found in {path}")
+        dfs = []
+        for f in csv_files:
+            sub = pd.read_csv(f)
+            sub["session_id"] = f.stem
+            dfs.append(sub)
+        df = pd.concat(dfs, ignore_index=True)
+    else:
+        df = pd.read_csv(csv_path)
+        # Auto-assign session_id by detecting time gaps > 5s
+        if "session_id" in df.columns:
+            df["session_id"] = df["session_id"].astype(str)
+        else:
+            df["session_id"] = "session_0"
+        if df["session_id"].nunique() <= 1 and "pc_timestamp_ms" in df.columns:
+            df = df.sort_values("pc_timestamp_ms").reset_index(drop=True)
+            time_diff = df["pc_timestamp_ms"].diff().fillna(0)
+            session_breaks = (time_diff > 5000).cumsum()
+            df["session_id"] = "session_" + session_breaks.astype(str)
+
     numeric_cols = ["pc_timestamp_ms", "board_timestamp_ms", "node_id",
                     "ax", "ay", "az", "gx", "gy", "gz"]
     for col in numeric_cols:
