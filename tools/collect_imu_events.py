@@ -32,8 +32,6 @@ STATE_KEY_MAP = {
     "2": "walk",
     "3": "run",
     "4": "move_noise",
-    "5": "raise_hold",
-    "6": "turn_body",
 }
 
 EVENT_KEY_MAP = {

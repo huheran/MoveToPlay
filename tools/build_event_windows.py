@@ -134,6 +134,40 @@ def build_window_specs(args: argparse.Namespace) -> dict[str, WindowSpec]:
     }
 
 
+def parse_filter_values(values: list[str]) -> set[str]:
+    parsed: set[str] = set()
+    for value in values:
+        for item in value.split(","):
+            text = item.strip()
+            if text:
+                parsed.add(text)
+    return parsed
+
+
+def filter_positive_events(events: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
+    include_groups = {normalize_event_group(v) for v in parse_filter_values(args.include_event_group)}
+    exclude_groups = {normalize_event_group(v) for v in parse_filter_values(args.exclude_event_group)}
+    include_types = parse_filter_values(args.include_event_type)
+    exclude_types = parse_filter_values(args.exclude_event_type)
+    include_ids = parse_filter_values(args.include_event_id)
+    exclude_ids = parse_filter_values(args.exclude_event_id)
+
+    filtered = events.copy()
+    if include_groups:
+        filtered = filtered[filtered["event_group"].isin(include_groups)]
+    if exclude_groups:
+        filtered = filtered[~filtered["event_group"].isin(exclude_groups)]
+    if include_types:
+        filtered = filtered[filtered["event_type"].isin(include_types)]
+    if exclude_types:
+        filtered = filtered[~filtered["event_type"].isin(exclude_types)]
+    if include_ids:
+        filtered = filtered[filtered["event_id"].isin(include_ids)]
+    if exclude_ids:
+        filtered = filtered[~filtered["event_id"].isin(exclude_ids)]
+    return filtered.reset_index(drop=True)
+
+
 def refine_event_time(
     samples: pd.DataFrame,
     event_group: str,
@@ -426,6 +460,42 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--random-seed", type=int, default=42)
 
     parser.add_argument("--label-source", choices=["event_group", "event_type"], default="event_group")
+    parser.add_argument(
+        "--include-event-group",
+        action="append",
+        default=[],
+        help="Only build positive windows for these event groups. Accepts comma-separated values and can repeat.",
+    )
+    parser.add_argument(
+        "--exclude-event-group",
+        action="append",
+        default=[],
+        help="Skip positive windows for these event groups. Accepts comma-separated values and can repeat.",
+    )
+    parser.add_argument(
+        "--include-event-type",
+        action="append",
+        default=[],
+        help="Only build positive windows for these event types. Accepts comma-separated values and can repeat.",
+    )
+    parser.add_argument(
+        "--exclude-event-type",
+        action="append",
+        default=[],
+        help="Skip positive windows for these event types. Accepts comma-separated values and can repeat.",
+    )
+    parser.add_argument(
+        "--include-event-id",
+        action="append",
+        default=[],
+        help="Only build positive windows for these event IDs. Accepts comma-separated values and can repeat.",
+    )
+    parser.add_argument(
+        "--exclude-event-id",
+        action="append",
+        default=[],
+        help="Skip positive windows for these event IDs. They are still excluded from negative windows.",
+    )
     parser.add_argument("--min-samples-per-window", type=int, default=1)
     parser.add_argument("--refine-event-center", action="store_true")
     parser.add_argument("--refine-radius-ms", type=int, default=300)
@@ -442,9 +512,10 @@ def main() -> int:
         return 1
     samples = load_samples(Path(args.samples))
     events = load_events(Path(args.events))
+    positive_events = filter_positive_events(events, args)
     specs = build_window_specs(args)
 
-    positive_windows = build_positive_windows(samples, events, specs, args)
+    positive_windows = build_positive_windows(samples, positive_events, specs, args)
     negative_windows = build_negative_windows(samples, events, len(positive_windows), args)
     all_windows = positive_windows + negative_windows
     output_df = materialize_windows(samples, all_windows, args)
@@ -452,6 +523,8 @@ def main() -> int:
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_df.to_csv(output_path, index=False)
+    print(f"[info] source events={len(events)}")
+    print(f"[info] selected positive events={len(positive_events)}")
     print(f"[info] positive windows={len(positive_windows)}")
     print(f"[info] negative windows={len(negative_windows)}")
     print(f"[info] written rows={len(output_df)}")
