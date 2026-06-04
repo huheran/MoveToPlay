@@ -76,7 +76,7 @@ static const char *TAG = "imu_main";
 #define DONGLE_ENABLE_RAW_CSV_OUTPUT      0
 #define DONGLE_ENABLE_SERIAL_AGE_COLUMN   1
 #define DONGLE_ENABLE_RF_INFERENCE        1
-#define DONGLE_USE_CNN_INFER              1
+#define DONGLE_USE_CNN_INFER              0
 #define DONGLE_ENABLE_USB_KEYBOARD        1
 #define DONGLE_ENABLE_USB_MOUSE           1
 #define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
@@ -123,7 +123,7 @@ static const char *TAG = "imu_main";
 #define DONGLE_MAX_TRACKER_NODES      8
 #define DONGLE_RF_MAX_NODE_AGE_MS     250
 #define DONGLE_RF_PRINT_INTERVAL_MS   120
-#define DONGLE_RF_MIN_CONFIDENCE      0.90f
+#define DONGLE_RF_MIN_CONFIDENCE      0.60f
 
 #define BATTERY_REPORT_INTERVAL_MS    5000
 
@@ -402,7 +402,7 @@ static void dongle_print_latest_states(void)
 #if DONGLE_ENABLE_USB_KEYBOARD
 #define DONGLE_KEY_TAP_HOLD_MS        80
 #define DONGLE_MOUSE_MOVE_DELTA       60
-#define DONGLE_CONFIRM_FRAMES         5
+#define DONGLE_CONFIRM_FRAMES         3
 #define DONGLE_INFER_RATE_HZ          25
 
 #define HID_KEY_E       0x08
@@ -419,6 +419,7 @@ typedef enum {
     ACTION_TYPE_KEY_HOLD,
     ACTION_TYPE_MOUSE_CLICK,
     ACTION_TYPE_MOUSE_MOVE_LEFT,
+    ACTION_TYPE_MOUSE_MOVE_RIGHT,
 } dongle_action_type_t;
 
 typedef enum {
@@ -458,20 +459,24 @@ static const dongle_key_action_t s_class_key_actions[DONGLE_NUM_CLASSES] = {
     [12] = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_COOLDOWN, 400, 0 },                     /* hands_shoot -> 鼠标左键 */
 };
 #else
-/* RF class order: both_hands_raise(0), hands_chest_push(1), hands_cross_chest(2),
-   idle(3), jump(4), left_hand_raise(5), right_hand_raise(6),
-   right_hand_slash(7), run(8), walk(9) */
+/* RF class order from sklearn string labels:
+   hands_cross_forehead(0), hands_press_down(1), hands_shoot(2), idle(3),
+   jump(4), kick(5), move_noise(6), right_hand_slash(7), run(8),
+   turn_left(9), turn_right(10), ultraman_beam(11), walk(12) */
 static const dongle_key_action_t s_class_key_actions[RF_MODEL_CLASS_COUNT] = {
-    [0] = { ACTION_TYPE_MOUSE_MOVE_LEFT, 0, 0, TRIGGER_SUSTAIN, 0, 25 },
-    [1] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_Q, TRIGGER_COOLDOWN, 2000, 0 },
-    [2] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_E, TRIGGER_COOLDOWN, 1000, 0 },
-    [3] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },
-    [4] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 3000, 0 },
-    [5] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_ESCAPE, TRIGGER_SUSTAIN, 0, 25 },
-    [6] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_M, TRIGGER_SUSTAIN, 0, 25 },
-    [7] = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_COOLDOWN, 400, 0 },
-    [8] = { ACTION_TYPE_KEY_HOLD, USB_KEYBOARD_MOD_LEFT_SHIFT, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 },
-    [9] = { ACTION_TYPE_KEY_HOLD, 0, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 },
+    [0] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_E, TRIGGER_COOLDOWN, 1000, 0 },  /* hands_cross_forehead */
+    [1] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_F, TRIGGER_COOLDOWN, 1000, 0 },  /* hands_press_down */
+    [2] = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_COOLDOWN, 400, 0 },       /* hands_shoot */
+    [3] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* idle */
+    [4] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 3000, 0 },  /* jump */
+    [5] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 3000, 0 },  /* kick */
+    [6] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* move_noise */
+    [7] = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_COOLDOWN, 220, 0 },       /* right_hand_slash */
+    [8] = { ACTION_TYPE_KEY_HOLD, USB_KEYBOARD_MOD_LEFT_SHIFT, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 }, /* run */
+    [9] = { ACTION_TYPE_MOUSE_MOVE_LEFT, 0, 0, TRIGGER_SUSTAIN, 0, 25 },     /* turn_left */
+    [10] = { ACTION_TYPE_MOUSE_MOVE_RIGHT, 0, 0, TRIGGER_SUSTAIN, 0, 25 },   /* turn_right */
+    [11] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_Q, TRIGGER_COOLDOWN, 2000, 0 }, /* ultraman_beam */
+    [12] = { ACTION_TYPE_KEY_HOLD, 0, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 },   /* walk */
 };
 #define DONGLE_NUM_CLASSES RF_MODEL_CLASS_COUNT
 #define DONGLE_IDLE_CLASS 3
@@ -514,6 +519,8 @@ static void dongle_fire_action(const dongle_key_action_t *action)
         usb_mouse_click(USB_MOUSE_BUTTON_LEFT, DONGLE_KEY_TAP_HOLD_MS);
     } else if (action->type == ACTION_TYPE_MOUSE_MOVE_LEFT) {
         usb_mouse_move(-DONGLE_MOUSE_MOVE_DELTA, 0, 0, 0);
+    } else if (action->type == ACTION_TYPE_MOUSE_MOVE_RIGHT) {
+        usb_mouse_move(DONGLE_MOUSE_MOVE_DELTA, 0, 0, 0);
     }
 }
 
