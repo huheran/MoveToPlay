@@ -1,0 +1,27 @@
+{
+  "tree_count": 180,
+  "node_count": 19430,
+  "feature_count": 812,
+  "class_count": 13,
+  "class_names": [
+    "hands_cross_forehead",
+    "hands_press_down",
+    "hands_shoot",
+    "idle",
+    "jump",
+    "kick",
+    "move_noise",
+    "right_hand_slash",
+    "run",
+    "turn_left",
+    "turn_right",
+    "ultraman_beam",
+    "walk"
+  ],
+  "node_ids": [
+    1,
+    2,
+    3,
+    4
+  ]
+}
