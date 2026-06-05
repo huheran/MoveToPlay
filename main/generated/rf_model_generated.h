@@ -3,9 +3,9 @@
 #include <stdint.h>
 
 #define RF_MODEL_TREE_COUNT 180
-#define RF_MODEL_NODE_COUNT 19430
+#define RF_MODEL_NODE_COUNT 31406
 #define RF_MODEL_FEATURE_COUNT 812
-#define RF_MODEL_CLASS_COUNT 13
+#define RF_MODEL_CLASS_COUNT 15
 
 extern const uint16_t rf_model_tree_offsets[RF_MODEL_TREE_COUNT + 1];
 extern const int16_t rf_model_children_left[RF_MODEL_NODE_COUNT];

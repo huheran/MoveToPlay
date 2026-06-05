@@ -1,8 +1,8 @@
 {
   "tree_count": 180,
-  "node_count": 19430,
+  "node_count": 31406,
   "feature_count": 812,
-  "class_count": 13,
+  "class_count": 15,
   "class_names": [
     "hands_cross_forehead",
     "hands_press_down",
@@ -10,7 +10,9 @@
     "idle",
     "jump",
     "kick",
+    "left_hand_raise",
     "move_noise",
+    "right_hand_raise",
     "right_hand_slash",
     "run",
     "turn_left",
