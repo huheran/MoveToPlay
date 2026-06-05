@@ -461,8 +461,9 @@ static const dongle_key_action_t s_class_key_actions[DONGLE_NUM_CLASSES] = {
 #else
 /* RF class order from sklearn string labels:
    hands_cross_forehead(0), hands_press_down(1), hands_shoot(2), idle(3),
-   jump(4), kick(5), move_noise(6), right_hand_slash(7), run(8),
-   turn_left(9), turn_right(10), ultraman_beam(11), walk(12) */
+   jump(4), kick(5), left_hand_raise(6), move_noise(7),
+   right_hand_raise(8), right_hand_slash(9), run(10), turn_left(11),
+   turn_right(12), ultraman_beam(13), walk(14) */
 static const dongle_key_action_t s_class_key_actions[RF_MODEL_CLASS_COUNT] = {
     [0] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_E, TRIGGER_COOLDOWN, 1000, 0 },  /* hands_cross_forehead */
     [1] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_F, TRIGGER_COOLDOWN, 1000, 0 },  /* hands_press_down */
@@ -470,13 +471,15 @@ static const dongle_key_action_t s_class_key_actions[RF_MODEL_CLASS_COUNT] = {
     [3] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* idle */
     [4] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 3000, 0 },  /* jump */
     [5] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 3000, 0 },  /* kick */
-    [6] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* move_noise */
-    [7] = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_COOLDOWN, 220, 0 },       /* right_hand_slash */
-    [8] = { ACTION_TYPE_KEY_HOLD, USB_KEYBOARD_MOD_LEFT_SHIFT, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 }, /* run */
-    [9] = { ACTION_TYPE_MOUSE_MOVE_LEFT, 0, 0, TRIGGER_SUSTAIN, 0, 25 },     /* turn_left */
-    [10] = { ACTION_TYPE_MOUSE_MOVE_RIGHT, 0, 0, TRIGGER_SUSTAIN, 0, 25 },   /* turn_right */
-    [11] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_Q, TRIGGER_COOLDOWN, 2000, 0 }, /* ultraman_beam */
-    [12] = { ACTION_TYPE_KEY_HOLD, 0, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 },   /* walk */
+    [6] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* left_hand_raise */
+    [7] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* move_noise */
+    [8] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* right_hand_raise */
+    [9] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* right_hand_slash */
+    [10] = { ACTION_TYPE_KEY_HOLD, USB_KEYBOARD_MOD_LEFT_SHIFT, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 }, /* run */
+    [11] = { ACTION_TYPE_MOUSE_MOVE_LEFT, 0, 0, TRIGGER_SUSTAIN, 0, 25 },    /* turn_left */
+    [12] = { ACTION_TYPE_MOUSE_MOVE_RIGHT, 0, 0, TRIGGER_SUSTAIN, 0, 25 },   /* turn_right */
+    [13] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_Q, TRIGGER_COOLDOWN, 2000, 0 }, /* ultraman_beam */
+    [14] = { ACTION_TYPE_KEY_HOLD, 0, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 },   /* walk */
 };
 #define DONGLE_NUM_CLASSES RF_MODEL_CLASS_COUNT
 #define DONGLE_IDLE_CLASS 3
