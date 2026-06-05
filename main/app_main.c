@@ -123,7 +123,7 @@ static const char *TAG = "imu_main";
 #define DONGLE_MAX_TRACKER_NODES      8
 #define DONGLE_RF_MAX_NODE_AGE_MS     250
 #define DONGLE_RF_PRINT_INTERVAL_MS   120
-#define DONGLE_RF_MIN_CONFIDENCE      0.60f
+#define DONGLE_RF_MIN_CONFIDENCE      0.80f
 
 #define BATTERY_REPORT_INTERVAL_MS    5000
 
