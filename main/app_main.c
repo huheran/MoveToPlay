@@ -14,7 +14,6 @@
 #include "imu_lsm6dsv.h"
 #include "m2p_espnow.h"
 #include "rf_infer.h"
-#include "cnn_infer.h"
 #include "usb_keyboard.h"
 #include "battery_monitor.h"
 #include "status_led.h"
@@ -48,25 +47,48 @@ static const char *TAG = "imu_main";
  * 2) 烧 tracker（身体节点）时：
  *    #define MOVE_TO_PLAY_DEVICE_MODE MOVE_TO_PLAY_MODE_TRACKER
  */
-//#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_TRACKER
-#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_DONGLE
+#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_TRACKER
+//#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_DONGLE
 
 #define MOVE_TO_PLAY_ENABLE_ESPNOW        1
 #define MOVE_TO_PLAY_ESPNOW_SEND_SAMPLES  1
 
 /*
  * DONGLE_DATA_COLLECT_MODE:
+ *   0 = 动作识别串口查看模式。开启RF推理，只输出识别到的动作，不输出USB HID。
  *   1 = 数据采集模式。关闭推理和USB HID，只输出原始CSV供采集脚本使用。
- *   0 = 正常游玩模式。开启推理和USB HID输出。
+ *   2 = 原神游玩模式。开启RF推理和USB HID键鼠映射。
  */
-#define DONGLE_DATA_COLLECT_MODE          0
+#define DONGLE_MODE_SERIAL_VIEW           0
+#define DONGLE_MODE_DATA_COLLECT          1
+#define DONGLE_MODE_PLAY                  2
 
-#if DONGLE_DATA_COLLECT_MODE
+#define DONGLE_DATA_COLLECT_MODE          2
+
+#if (DONGLE_DATA_COLLECT_MODE != DONGLE_MODE_SERIAL_VIEW) && \
+    (DONGLE_DATA_COLLECT_MODE != DONGLE_MODE_DATA_COLLECT) && \
+    (DONGLE_DATA_COLLECT_MODE != DONGLE_MODE_PLAY)
+#error "DONGLE_DATA_COLLECT_MODE must be 0(serial), 1(collect), or 2(play)"
+#endif
+
+#if DONGLE_DATA_COLLECT_MODE == DONGLE_MODE_SERIAL_VIEW
+#define DONGLE_ENABLE_SERIAL_OUTPUT       1
+#define DONGLE_ENABLE_RAW_CSV_OUTPUT      0
+#define DONGLE_ENABLE_SERIAL_AGE_COLUMN   1
+#define DONGLE_ENABLE_RF_INFERENCE        1
+#define DONGLE_USE_CNN_INFER              0
+#define DONGLE_ENABLE_HID_ACTION_LOG      1
+#define DONGLE_ENABLE_USB_KEYBOARD        0
+#define DONGLE_ENABLE_USB_MOUSE           0
+#define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
+#define DONGLE_ENABLE_USB_MOUSE_TEST      0
+#elif DONGLE_DATA_COLLECT_MODE == DONGLE_MODE_DATA_COLLECT
 #define DONGLE_ENABLE_SERIAL_OUTPUT       1
 #define DONGLE_ENABLE_RAW_CSV_OUTPUT      1
 #define DONGLE_ENABLE_SERIAL_AGE_COLUMN   1
 #define DONGLE_ENABLE_RF_INFERENCE        0
 #define DONGLE_USE_CNN_INFER              0
+#define DONGLE_ENABLE_HID_ACTION_LOG      0
 #define DONGLE_ENABLE_USB_KEYBOARD        0
 #define DONGLE_ENABLE_USB_MOUSE           0
 #define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
@@ -77,6 +99,7 @@ static const char *TAG = "imu_main";
 #define DONGLE_ENABLE_SERIAL_AGE_COLUMN   1
 #define DONGLE_ENABLE_RF_INFERENCE        1
 #define DONGLE_USE_CNN_INFER              0
+#define DONGLE_ENABLE_HID_ACTION_LOG      1
 #define DONGLE_ENABLE_USB_KEYBOARD        1
 #define DONGLE_ENABLE_USB_MOUSE           1
 #define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
@@ -107,7 +130,7 @@ static const char *TAG = "imu_main";
  */
 #define MOVE_TO_PLAY_TRACKER_NODE_ID  TRACKER_NODE_LEFT_HAND
 
-#define BOARD_NODE_ID                 MOVE_TO_PLAY_TRACKER_NODE_ID
+#define BOARD_NODE_ID                 TRACKER_NODE_RIGHT_HAND
 
 #define IMU_SPI_HOST                  SPI2_HOST
 #define IMU_SPI_SCLK_GPIO             GPIO_NUM_12
@@ -399,33 +422,43 @@ static void dongle_print_latest_states(void)
 
 #if DONGLE_ENABLE_RF_INFERENCE
 
-#if DONGLE_ENABLE_USB_KEYBOARD
+#if DONGLE_ENABLE_HID_ACTION_LOG
 #define DONGLE_KEY_TAP_HOLD_MS        80
-#define DONGLE_MOUSE_MOVE_DELTA       60
+#define DONGLE_HAND_MOUSE_MOVE_DELTA  127
+#define DONGLE_TURN_MOUSE_MOVE_DELTA  60
 #define DONGLE_CONFIRM_FRAMES         3
 #define DONGLE_INFER_RATE_HZ          25
 
+#define DONGLE_ARRAY_SIZE(a)          (sizeof(a) / sizeof((a)[0]))
+
+#define HID_KEY_1       0x1E
+#define HID_KEY_2       0x1F
+#define HID_KEY_3       0x20
+#define HID_KEY_4       0x21
 #define HID_KEY_E       0x08
 #define HID_KEY_F       0x09
-#define HID_KEY_M       0x10
 #define HID_KEY_Q       0x14
 #define HID_KEY_W       0x1A
 #define HID_KEY_SPACE   0x2C
-#define HID_KEY_ESCAPE  0x29
 
 typedef enum {
     ACTION_TYPE_NONE,
     ACTION_TYPE_KEY_TAP,
     ACTION_TYPE_KEY_HOLD,
+    ACTION_TYPE_CHARACTER_CYCLE,
     ACTION_TYPE_MOUSE_CLICK,
+    ACTION_TYPE_MOUSE_HOLD,
     ACTION_TYPE_MOUSE_MOVE_LEFT,
     ACTION_TYPE_MOUSE_MOVE_RIGHT,
+    ACTION_TYPE_MOUSE_TURN_LEFT,
+    ACTION_TYPE_MOUSE_TURN_RIGHT,
 } dongle_action_type_t;
 
 typedef enum {
     TRIGGER_COOLDOWN,
     TRIGGER_EDGE,
     TRIGGER_SUSTAIN,
+    TRIGGER_REPEAT,
 } dongle_trigger_mode_t;
 
 typedef struct {
@@ -437,64 +470,187 @@ typedef struct {
     uint16_t sustain_frames;
 } dongle_key_action_t;
 
-#if DONGLE_USE_CNN_INFER
-/* CNN class order: idle(0), right_hand_raise(1), right_hand_slash(2), run(3),
-   walk(4), hands_cross_forehead(5), left_hand_raise(6), ultraman_beam(7),
-   hands_press_down(8), kick(9), jump(10), turn_body(11), hands_shoot(12) */
-#define DONGLE_NUM_CLASSES CNN1D_NUM_CLASSES
-#define DONGLE_IDLE_CLASS 0
-static const dongle_key_action_t s_class_key_actions[DONGLE_NUM_CLASSES] = {
-    [0]  = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                              /* idle */
-    [1]  = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_M, TRIGGER_SUSTAIN, 0, 25 },                   /* right_hand_raise -> M */
-    [2]  = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_COOLDOWN, 400, 0 },                     /* right_hand_slash -> 鼠标左键 */
-    [3]  = { ACTION_TYPE_KEY_HOLD, USB_KEYBOARD_MOD_LEFT_SHIFT, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 }, /* run */
-    [4]  = { ACTION_TYPE_KEY_HOLD, 0, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 },                  /* walk */
-    [5]  = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_E, TRIGGER_COOLDOWN, 1000, 0 },                /* hands_cross_forehead -> E */
-    [6]  = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_ESCAPE, TRIGGER_SUSTAIN, 0, 25 },              /* left_hand_raise -> ESC */
-    [7]  = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_Q, TRIGGER_COOLDOWN, 2000, 0 },                /* ultraman_beam -> Q */
-    [8]  = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_F, TRIGGER_COOLDOWN, 1000, 0 },                /* hands_press_down -> F */
-    [9]  = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 3000, 0 },                /* kick -> SPACE */
-    [10] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 3000, 0 },                /* jump -> SPACE */
-    [11] = { ACTION_TYPE_MOUSE_MOVE_LEFT, 0, 0, TRIGGER_SUSTAIN, 0, 25 },                   /* turn_body -> 鼠标左移 */
-    [12] = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_COOLDOWN, 400, 0 },                     /* hands_shoot -> 鼠标左键 */
-};
-#else
 /* RF class order from sklearn string labels:
    hands_cross_forehead(0), hands_press_down(1), hands_shoot(2), idle(3),
    jump(4), kick(5), left_hand_raise(6), move_noise(7),
    right_hand_raise(8), right_hand_slash(9), run(10), turn_left(11),
    turn_right(12), ultraman_beam(13), walk(14) */
 static const dongle_key_action_t s_class_key_actions[RF_MODEL_CLASS_COUNT] = {
-    [0] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_E, TRIGGER_COOLDOWN, 1000, 0 },  /* hands_cross_forehead */
-    [1] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_F, TRIGGER_COOLDOWN, 1000, 0 },  /* hands_press_down */
-    [2] = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_COOLDOWN, 400, 0 },       /* hands_shoot */
+    [0] = { ACTION_TYPE_CHARACTER_CYCLE, 0, 0, TRIGGER_EDGE, 800, 0 },       /* hands_cross_forehead -> 1/2/3/4 */
+    [1] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_F, TRIGGER_COOLDOWN, 600, 0 },   /* hands_press_down -> F */
+    [2] = { ACTION_TYPE_MOUSE_HOLD, 0, 0, TRIGGER_COOLDOWN, 0, 0 },          /* hands_shoot -> hold left mouse */
     [3] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* idle */
-    [4] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 3000, 0 },  /* jump */
-    [5] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 3000, 0 },  /* kick */
-    [6] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* left_hand_raise */
+    [4] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 1000, 0 },  /* jump -> SPACE */
+    [5] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_E, TRIGGER_COOLDOWN, 1000, 0 },  /* kick -> E */
+    [6] = { ACTION_TYPE_MOUSE_MOVE_LEFT, 0, 0, TRIGGER_REPEAT, 40, 1 },      /* left_hand_raise -> mouse left */
     [7] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* move_noise */
-    [8] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* right_hand_raise */
-    [9] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* right_hand_slash */
-    [10] = { ACTION_TYPE_KEY_HOLD, USB_KEYBOARD_MOD_LEFT_SHIFT, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 }, /* run */
-    [11] = { ACTION_TYPE_MOUSE_MOVE_LEFT, 0, 0, TRIGGER_SUSTAIN, 0, 25 },    /* turn_left */
-    [12] = { ACTION_TYPE_MOUSE_MOVE_RIGHT, 0, 0, TRIGGER_SUSTAIN, 0, 25 },   /* turn_right */
-    [13] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_Q, TRIGGER_COOLDOWN, 2000, 0 }, /* ultraman_beam */
-    [14] = { ACTION_TYPE_KEY_HOLD, 0, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 },   /* walk */
+    [8] = { ACTION_TYPE_MOUSE_MOVE_RIGHT, 0, 0, TRIGGER_REPEAT, 40, 1 },     /* right_hand_raise -> mouse right */
+    [9] = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_EDGE, 250, 0 },           /* right_hand_slash -> left click */
+    [10] = { ACTION_TYPE_KEY_HOLD, USB_KEYBOARD_MOD_LEFT_SHIFT, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 }, /* run -> Shift+W */
+    [11] = { ACTION_TYPE_MOUSE_TURN_LEFT, 0, 0, TRIGGER_REPEAT, 40, 1 },     /* turn_left -> mouse left */
+    [12] = { ACTION_TYPE_MOUSE_TURN_RIGHT, 0, 0, TRIGGER_REPEAT, 40, 1 },    /* turn_right -> mouse right */
+    [13] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_Q, TRIGGER_COOLDOWN, 1000, 0 }, /* ultraman_beam -> Q */
+    [14] = { ACTION_TYPE_KEY_HOLD, 0, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 },   /* walk -> W */
 };
 #define DONGLE_NUM_CLASSES RF_MODEL_CLASS_COUNT
 #define DONGLE_IDLE_CLASS 3
+
+#if DONGLE_ENABLE_USB_KEYBOARD
+#define DONGLE_HID_LOG_PREFIX "# hid"
+#else
+#define DONGLE_HID_LOG_PREFIX "# hid-dry-run"
 #endif
 
-static int8_t s_dongle_held_class = -1;
+static const char *dongle_action_class_name(uint8_t class_idx)
+{
+    return (class_idx < RF_MODEL_CLASS_COUNT) ? rf_model_class_names[class_idx] : "unknown";
+}
+
+static const char *dongle_key_name(uint8_t keycode)
+{
+    switch (keycode) {
+    case HID_KEY_1:
+        return "1";
+    case HID_KEY_2:
+        return "2";
+    case HID_KEY_3:
+        return "3";
+    case HID_KEY_4:
+        return "4";
+    case HID_KEY_E:
+        return "E";
+    case HID_KEY_F:
+        return "F";
+    case HID_KEY_Q:
+        return "Q";
+    case HID_KEY_W:
+        return "W";
+    case HID_KEY_SPACE:
+        return "SPACE";
+    default:
+        return "NONE";
+    }
+}
+
+static void dongle_log_key_event(uint8_t class_idx,
+                                 const char *event,
+                                 uint8_t modifier,
+                                 uint8_t keycode,
+                                 esp_err_t err)
+{
+#if DONGLE_ENABLE_USB_KEYBOARD
+    printf("%s: action=%s event=%s modifier=0x%02x key=%s result=%s\n",
+           DONGLE_HID_LOG_PREFIX,
+           dongle_action_class_name(class_idx),
+           event,
+           modifier,
+           dongle_key_name(keycode),
+           esp_err_to_name(err));
+#else
+    (void)err;
+    printf("%s: action=%s event=%s modifier=0x%02x key=%s\n",
+           DONGLE_HID_LOG_PREFIX,
+           dongle_action_class_name(class_idx),
+           event,
+           modifier,
+           dongle_key_name(keycode));
+#endif
+}
+
+static void dongle_log_mouse_button_event(uint8_t class_idx,
+                                          const char *event,
+                                          uint8_t buttons,
+                                          esp_err_t err)
+{
+#if DONGLE_ENABLE_USB_KEYBOARD
+    printf("%s: action=%s event=%s buttons=0x%02x result=%s\n",
+           DONGLE_HID_LOG_PREFIX,
+           dongle_action_class_name(class_idx),
+           event,
+           buttons,
+           esp_err_to_name(err));
+#else
+    (void)err;
+    printf("%s: action=%s event=%s buttons=0x%02x\n",
+           DONGLE_HID_LOG_PREFIX,
+           dongle_action_class_name(class_idx),
+           event,
+           buttons);
+#endif
+}
+
+static void dongle_log_mouse_move_event(uint8_t class_idx, int8_t dx, esp_err_t err)
+{
+#if DONGLE_ENABLE_USB_KEYBOARD
+    printf("%s: action=%s event=mouse_move dx=%d result=%s\n",
+           DONGLE_HID_LOG_PREFIX,
+           dongle_action_class_name(class_idx),
+           dx,
+           esp_err_to_name(err));
+#else
+    (void)err;
+    printf("%s: action=%s event=mouse_move dx=%d\n",
+           DONGLE_HID_LOG_PREFIX,
+           dongle_action_class_name(class_idx),
+           dx);
+#endif
+}
+
+static int8_t s_dongle_keyboard_hold_class = -1;
+static int8_t s_dongle_mouse_hold_class = -1;
 static int8_t s_dongle_confirmed_class = -1;
 static int8_t s_dongle_pending_class = -1;
 static uint8_t s_dongle_pending_count = 0;
 
 static int64_t s_dongle_last_fire_us[DONGLE_NUM_CLASSES] = {0};
-static bool s_dongle_edge_armed[DONGLE_NUM_CLASSES] = {
-    true, true, true, true, true, true, true, true, true, true, true, true, true
-};
+static bool s_dongle_edge_armed[DONGLE_NUM_CLASSES] = {0};
+static bool s_dongle_edge_armed_ready = false;
 static uint16_t s_dongle_sustain_count[DONGLE_NUM_CLASSES] = {0};
+static uint8_t s_dongle_character_slot = 0;
+
+static void dongle_init_edge_armed(void)
+{
+    if (s_dongle_edge_armed_ready) {
+        return;
+    }
+
+    for (uint8_t i = 0; i < DONGLE_NUM_CLASSES; i++) {
+        s_dongle_edge_armed[i] = true;
+    }
+    s_dongle_edge_armed_ready = true;
+}
+
+static void dongle_release_keyboard_hold(void)
+{
+    if (s_dongle_keyboard_hold_class >= 0) {
+        const uint8_t class_idx = (uint8_t)s_dongle_keyboard_hold_class;
+        esp_err_t err = ESP_OK;
+#if DONGLE_ENABLE_USB_KEYBOARD
+        err = usb_keyboard_release();
+#endif
+        dongle_log_key_event(class_idx, "key_release", 0, 0, err);
+        s_dongle_keyboard_hold_class = -1;
+    }
+}
+
+static void dongle_release_mouse_hold(void)
+{
+    if (s_dongle_mouse_hold_class >= 0) {
+        const uint8_t class_idx = (uint8_t)s_dongle_mouse_hold_class;
+        esp_err_t err = ESP_OK;
+#if DONGLE_ENABLE_USB_KEYBOARD
+        err = usb_mouse_release_buttons();
+#endif
+        dongle_log_mouse_button_event(class_idx, "mouse_release", 0, err);
+        s_dongle_mouse_hold_class = -1;
+    }
+}
+
+static void dongle_release_hold_actions(void)
+{
+    dongle_release_keyboard_hold();
+    dongle_release_mouse_hold();
+}
 
 static uint8_t dongle_smooth_class(uint8_t raw_class)
 {
@@ -514,27 +670,74 @@ static uint8_t dongle_smooth_class(uint8_t raw_class)
     return (s_dongle_confirmed_class >= 0) ? (uint8_t)s_dongle_confirmed_class : DONGLE_IDLE_CLASS;
 }
 
-static void dongle_fire_action(const dongle_key_action_t *action)
+static void dongle_fire_action(uint8_t class_idx, const dongle_key_action_t *action)
 {
     if (action->type == ACTION_TYPE_KEY_TAP) {
-        usb_keyboard_tap_key(action->modifier, action->keycode, DONGLE_KEY_TAP_HOLD_MS);
+        esp_err_t err = ESP_OK;
+#if DONGLE_ENABLE_USB_KEYBOARD
+        err = usb_keyboard_tap_key(action->modifier, action->keycode, DONGLE_KEY_TAP_HOLD_MS);
+#endif
+        dongle_log_key_event(class_idx, "key_tap", action->modifier, action->keycode, err);
+    } else if (action->type == ACTION_TYPE_CHARACTER_CYCLE) {
+        static const uint8_t character_keys[] = {HID_KEY_1, HID_KEY_2, HID_KEY_3, HID_KEY_4};
+        const uint8_t keycode = character_keys[s_dongle_character_slot];
+        esp_err_t err = ESP_OK;
+#if DONGLE_ENABLE_USB_KEYBOARD
+        err = usb_keyboard_tap_key(0, keycode, DONGLE_KEY_TAP_HOLD_MS);
+#endif
+        dongle_log_key_event(class_idx, "character_cycle", 0, keycode, err);
+        if (err == ESP_OK) {
+            s_dongle_character_slot = (uint8_t)((s_dongle_character_slot + 1U) %
+                                                DONGLE_ARRAY_SIZE(character_keys));
+        }
     } else if (action->type == ACTION_TYPE_MOUSE_CLICK) {
-        usb_mouse_click(USB_MOUSE_BUTTON_LEFT, DONGLE_KEY_TAP_HOLD_MS);
+        esp_err_t err = ESP_OK;
+#if DONGLE_ENABLE_USB_KEYBOARD
+        err = usb_mouse_click(USB_MOUSE_BUTTON_LEFT, DONGLE_KEY_TAP_HOLD_MS);
+#endif
+        dongle_log_mouse_button_event(class_idx, "mouse_click", USB_MOUSE_BUTTON_LEFT, err);
     } else if (action->type == ACTION_TYPE_MOUSE_MOVE_LEFT) {
-        usb_mouse_move(-DONGLE_MOUSE_MOVE_DELTA, 0, 0, 0);
+        esp_err_t err = ESP_OK;
+        const int8_t dx = -DONGLE_HAND_MOUSE_MOVE_DELTA;
+#if DONGLE_ENABLE_USB_KEYBOARD
+        err = usb_mouse_move(dx, 0, 0, 0);
+#endif
+        dongle_log_mouse_move_event(class_idx, dx, err);
     } else if (action->type == ACTION_TYPE_MOUSE_MOVE_RIGHT) {
-        usb_mouse_move(DONGLE_MOUSE_MOVE_DELTA, 0, 0, 0);
+        esp_err_t err = ESP_OK;
+        const int8_t dx = DONGLE_HAND_MOUSE_MOVE_DELTA;
+#if DONGLE_ENABLE_USB_KEYBOARD
+        err = usb_mouse_move(dx, 0, 0, 0);
+#endif
+        dongle_log_mouse_move_event(class_idx, dx, err);
+    } else if (action->type == ACTION_TYPE_MOUSE_TURN_LEFT) {
+        esp_err_t err = ESP_OK;
+        const int8_t dx = -DONGLE_TURN_MOUSE_MOVE_DELTA;
+#if DONGLE_ENABLE_USB_KEYBOARD
+        err = usb_mouse_move(dx, 0, 0, 0);
+#endif
+        dongle_log_mouse_move_event(class_idx, dx, err);
+    } else if (action->type == ACTION_TYPE_MOUSE_TURN_RIGHT) {
+        esp_err_t err = ESP_OK;
+        const int8_t dx = DONGLE_TURN_MOUSE_MOVE_DELTA;
+#if DONGLE_ENABLE_USB_KEYBOARD
+        err = usb_mouse_move(dx, 0, 0, 0);
+#endif
+        dongle_log_mouse_move_event(class_idx, dx, err);
     }
 }
 
 static void dongle_send_key_action(uint8_t infer_class, float infer_confidence, int64_t now_us)
 {
+#if DONGLE_ENABLE_USB_KEYBOARD
     if (!usb_keyboard_is_ready()) {
         return;
     }
+#endif
+    dongle_init_edge_armed();
 
     uint8_t raw_class = infer_class;
-    if (infer_confidence < DONGLE_RF_MIN_CONFIDENCE) {
+    if (raw_class >= DONGLE_NUM_CLASSES || infer_confidence < DONGLE_RF_MIN_CONFIDENCE) {
         raw_class = DONGLE_IDLE_CLASS;
     }
 
@@ -567,31 +770,47 @@ static void dongle_send_key_action(uint8_t infer_class, float infer_confidence, 
 
     /* Handle NONE (idle) */
     if (action->type == ACTION_TYPE_NONE) {
-        if (s_dongle_held_class >= 0) {
-            usb_keyboard_release();
-            s_dongle_held_class = -1;
-        }
+        dongle_release_hold_actions();
         return;
     }
 
     /* Handle HOLD (walk/run) */
     if (action->type == ACTION_TYPE_KEY_HOLD) {
-        if (s_dongle_held_class != (int8_t)class_idx) {
-            if (s_dongle_held_class >= 0) {
-                usb_keyboard_release();
-            }
+        dongle_release_mouse_hold();
+        if (s_dongle_keyboard_hold_class != (int8_t)class_idx) {
+            dongle_release_keyboard_hold();
+            esp_err_t err = ESP_OK;
+#if DONGLE_ENABLE_USB_KEYBOARD
             const uint8_t keycodes[6] = { action->keycode, 0, 0, 0, 0, 0 };
-            usb_keyboard_press_keys(action->modifier, keycodes);
-            s_dongle_held_class = (int8_t)class_idx;
+            err = usb_keyboard_press_keys(action->modifier, keycodes);
+#endif
+            dongle_log_key_event(class_idx, "key_hold", action->modifier, action->keycode, err);
+            if (err == ESP_OK) {
+                s_dongle_keyboard_hold_class = (int8_t)class_idx;
+            }
         }
         return;
     }
 
-    /* Release any held key before tap actions */
-    if (s_dongle_held_class >= 0) {
-        usb_keyboard_release();
-        s_dongle_held_class = -1;
+    /* Handle mouse hold (aim/charged attack) */
+    if (action->type == ACTION_TYPE_MOUSE_HOLD) {
+        dongle_release_keyboard_hold();
+        if (s_dongle_mouse_hold_class != (int8_t)class_idx) {
+            dongle_release_mouse_hold();
+            esp_err_t err = ESP_OK;
+#if DONGLE_ENABLE_USB_KEYBOARD
+            err = usb_mouse_set_buttons(USB_MOUSE_BUTTON_LEFT);
+#endif
+            dongle_log_mouse_button_event(class_idx, "mouse_hold", USB_MOUSE_BUTTON_LEFT, err);
+            if (err == ESP_OK) {
+                s_dongle_mouse_hold_class = (int8_t)class_idx;
+            }
+        }
+        return;
     }
+
+    /* Release held actions before tap/move actions */
+    dongle_release_hold_actions();
 
     /* Handle tap-like actions based on trigger mode */
     bool should_fire = false;
@@ -616,10 +835,18 @@ static void dongle_send_key_action(uint8_t infer_class, float infer_confidence, 
         }
         break;
     }
+    case TRIGGER_REPEAT: {
+        int64_t elapsed = now_us - s_dongle_last_fire_us[class_idx];
+        if (s_dongle_sustain_count[class_idx] >= action->sustain_frames &&
+            elapsed >= ((int64_t)action->cooldown_ms * 1000LL)) {
+            should_fire = true;
+        }
+        break;
+    }
     }
 
     if (should_fire) {
-        dongle_fire_action(action);
+        dongle_fire_action(class_idx, action);
         s_dongle_last_fire_us[class_idx] = now_us;
         if (action->trigger == TRIGGER_EDGE) {
             s_dongle_edge_armed[class_idx] = false;
@@ -675,29 +902,6 @@ static void dongle_run_rf_inference(int64_t now_us)
         return;
     }
 
-#if DONGLE_USE_CNN_INFER
-    cnn_infer_node_sample_t cnn_frame[CNN_INFER_NODE_COUNT];
-    for (int i = 0; i < CNN_INFER_NODE_COUNT; i++) {
-        cnn_frame[i].ax = frame[i].ax;
-        cnn_frame[i].ay = frame[i].ay;
-        cnn_frame[i].az = frame[i].az;
-        cnn_frame[i].gx = frame[i].gx;
-        cnn_frame[i].gy = frame[i].gy;
-        cnn_frame[i].gz = frame[i].gz;
-    }
-
-    cnn_infer_result_t cnn_result = {0};
-    const int64_t infer_start_us = esp_timer_get_time();
-    if (!cnn_infer_push_frame(cnn_frame, &cnn_result) || !cnn_result.valid) {
-        return;
-    }
-    const int64_t infer_elapsed_us = esp_timer_get_time() - infer_start_us;
-
-    const uint8_t result_class = cnn_result.class_index;
-    const float result_confidence = cnn_result.confidence;
-    const char *result_label = cnn_result.label;
-    const uint32_t result_frames = cnn_result.frame_count;
-#else
     rf_infer_result_t result = {0};
     const int64_t infer_start_us = esp_timer_get_time();
     if (!rf_infer_push_frame(frame, &result) || !result.valid) {
@@ -709,9 +913,8 @@ static void dongle_run_rf_inference(int64_t now_us)
     const float result_confidence = result.confidence;
     const char *result_label = result.label;
     const uint32_t result_frames = result.frame_count;
-#endif
 
-#if DONGLE_ENABLE_USB_KEYBOARD
+#if DONGLE_ENABLE_HID_ACTION_LOG
     dongle_send_key_action(result_class, result_confidence, now_us);
 #endif
 
