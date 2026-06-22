@@ -32,10 +32,11 @@ STATE_KEY_MAP = {
     "2": "walk",
     "3": "run",
     "4": "move_noise",
+    "5": "right_hand_slash",
+    "a": "right_hand_slash",
 }
 
 EVENT_KEY_MAP = {
-    "a": ("attack_event", "right_hand_slash"),
     "h": ("attack_event", "hands_shoot"),
     "k": ("attack_event", "kick"),
     "j": ("jump_event", "jump"),

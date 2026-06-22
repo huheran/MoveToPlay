@@ -63,6 +63,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--serial-timeout", type=float, default=0.05, help="Serial read timeout in seconds")
     parser.add_argument("--predict-interval-ms", type=float, default=120.0, help="Minimum interval between predictions")
     parser.add_argument("--min-confidence", type=float, default=0.45, help="Confidence threshold below which output becomes uncertain")
+    parser.add_argument(
+        "--confirm-frames",
+        type=int,
+        default=3,
+        help="Require this many consecutive raw predictions before changing displayed action",
+    )
     parser.add_argument("--history-factor", type=float, default=4.0, help="Keep roughly window_size * factor frames in rolling history")
     return parser
 
@@ -192,6 +198,9 @@ def main() -> int:
 
     packets: deque[SerialPacket] = deque(maxlen=max_packets)
     last_predict_ms = 0.0
+    pending_label = ""
+    pending_count = 0
+    confirmed_label = "uncertain"
     valid_lines = 0
     bad_lines = 0
     skipped_lines = 0
@@ -234,13 +243,21 @@ def main() -> int:
             pred_idx = int(np.argmax(proba))
             pred_label = model.classes_[pred_idx]
             confidence = float(proba[pred_idx])
-            display_label = pred_label if confidence >= args.min_confidence else "uncertain"
+            raw_display_label = pred_label if confidence >= args.min_confidence else "uncertain"
+            if raw_display_label == pending_label:
+                pending_count += 1
+            else:
+                pending_label = raw_display_label
+                pending_count = 1
+            if pending_count >= max(1, args.confirm_frames):
+                confirmed_label = pending_label
 
             class_prob_text = " ".join(
                 f"{label}={prob:.2f}" for label, prob in sorted(zip(model.classes_, proba), key=lambda x: x[0])
             )
             print(
-                f"\rpred={display_label:<10s} raw={pred_label:<10s} conf={confidence:.2f} "
+                f"\rpred={confirmed_label:<16s} raw={pred_label:<16s} conf={confidence:.2f} "
+                f"pending={pending_label}:{pending_count:<2d} "
                 f"frames={len(synced_df):<4d} valid={valid_lines:<6d} bad={bad_lines:<4d} skip={skipped_lines:<4d} "
                 f"{class_prob_text}   ",
                 end="",
