@@ -146,7 +146,7 @@ static const char *TAG = "imu_main";
 #define DONGLE_MAX_TRACKER_NODES      8
 #define DONGLE_RF_MAX_NODE_AGE_MS     250
 #define DONGLE_RF_PRINT_INTERVAL_MS   120
-#define DONGLE_RF_MIN_CONFIDENCE      0.80f
+#define DONGLE_RF_MIN_CONFIDENCE      0.60f
 
 #define BATTERY_REPORT_INTERVAL_MS    5000
 
@@ -485,7 +485,7 @@ static const dongle_key_action_t s_class_key_actions[RF_MODEL_CLASS_COUNT] = {
     [6] = { ACTION_TYPE_MOUSE_MOVE_LEFT, 0, 0, TRIGGER_REPEAT, 40, 1 },      /* left_hand_raise -> mouse left */
     [7] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* move_noise */
     [8] = { ACTION_TYPE_MOUSE_MOVE_RIGHT, 0, 0, TRIGGER_REPEAT, 40, 1 },     /* right_hand_raise -> mouse right */
-    [9] = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_EDGE, 250, 0 },           /* right_hand_slash -> left click */
+    [9] = { ACTION_TYPE_MOUSE_HOLD, 0, 0, TRIGGER_COOLDOWN, 0, 0 },          /* right_hand_slash -> hold left mouse */
     [10] = { ACTION_TYPE_KEY_HOLD, USB_KEYBOARD_MOD_LEFT_SHIFT, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 }, /* run -> Shift+W */
     [11] = { ACTION_TYPE_MOUSE_TURN_LEFT, 0, 0, TRIGGER_REPEAT, 40, 1 },     /* turn_left -> mouse left */
     [12] = { ACTION_TYPE_MOUSE_TURN_RIGHT, 0, 0, TRIGGER_REPEAT, 40, 1 },    /* turn_right -> mouse right */
