@@ -7,7 +7,6 @@
 
 static const char *TAG = "status_led";
 
-#define SK6812_GPIO         GPIO_NUM_38
 #define RMT_RESOLUTION_HZ   10000000
 
 #define SK6812_T0H_NS  300
@@ -136,10 +135,10 @@ static esp_err_t sk6812_encoder_new(rmt_encoder_handle_t *ret_encoder)
     return ESP_OK;
 }
 
-esp_err_t status_led_init(void)
+esp_err_t status_led_init(gpio_num_t data_gpio)
 {
     rmt_tx_channel_config_t tx_cfg = {
-        .gpio_num = SK6812_GPIO,
+        .gpio_num = data_gpio,
         .clk_src = RMT_CLK_SRC_DEFAULT,
         .resolution_hz = RMT_RESOLUTION_HZ,
         .mem_block_symbols = 64,
@@ -164,7 +163,7 @@ esp_err_t status_led_init(void)
     }
 
     status_led_off();
-    ESP_LOGI(TAG, "SK6812 LED initialized on GPIO%d", SK6812_GPIO);
+    ESP_LOGI(TAG, "SK6812 LED initialized on GPIO%d", data_gpio);
     return ESP_OK;
 }
 

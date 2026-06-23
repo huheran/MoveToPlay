@@ -7,8 +7,6 @@
 
 static const char *TAG = "battery";
 
-#define BATTERY_ADC_UNIT        ADC_UNIT_1
-#define BATTERY_ADC_CHANNEL     ADC_CHANNEL_3
 #define BATTERY_ADC_ATTEN       ADC_ATTEN_DB_12
 
 #define VOLTAGE_DIVIDER_RATIO   2.0f
@@ -19,11 +17,18 @@ static const char *TAG = "battery";
 static adc_oneshot_unit_handle_t s_adc_handle;
 static adc_cali_handle_t s_cali_handle;
 static bool s_cali_valid;
+static adc_unit_t s_adc_unit;
+static adc_channel_t s_adc_channel;
+static gpio_num_t s_battery_gpio;
 
-esp_err_t battery_monitor_init(void)
+esp_err_t battery_monitor_init(adc_unit_t unit_id, adc_channel_t channel, gpio_num_t sense_gpio)
 {
+    s_adc_unit = unit_id;
+    s_adc_channel = channel;
+    s_battery_gpio = sense_gpio;
+
     adc_oneshot_unit_init_cfg_t unit_cfg = {
-        .unit_id = BATTERY_ADC_UNIT,
+        .unit_id = s_adc_unit,
     };
     esp_err_t err = adc_oneshot_new_unit(&unit_cfg, &s_adc_handle);
     if (err != ESP_OK) {
@@ -35,15 +40,15 @@ esp_err_t battery_monitor_init(void)
         .atten = BATTERY_ADC_ATTEN,
         .bitwidth = ADC_BITWIDTH_12,
     };
-    err = adc_oneshot_config_channel(s_adc_handle, BATTERY_ADC_CHANNEL, &chan_cfg);
+    err = adc_oneshot_config_channel(s_adc_handle, s_adc_channel, &chan_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "adc_oneshot_config_channel failed: %s", esp_err_to_name(err));
         return err;
     }
 
     adc_cali_curve_fitting_config_t cali_cfg = {
-        .unit_id = BATTERY_ADC_UNIT,
-        .chan = BATTERY_ADC_CHANNEL,
+        .unit_id = s_adc_unit,
+        .chan = s_adc_channel,
         .atten = BATTERY_ADC_ATTEN,
         .bitwidth = ADC_BITWIDTH_12,
     };
@@ -53,14 +58,18 @@ esp_err_t battery_monitor_init(void)
         ESP_LOGW(TAG, "ADC calibration not available, using raw values");
     }
 
-    ESP_LOGI(TAG, "battery monitor initialized (GPIO4, ADC1_CH3)");
+    ESP_LOGI(TAG,
+             "battery monitor initialized on GPIO%d (ADC unit=%d channel=%d)",
+             s_battery_gpio,
+             s_adc_unit,
+             s_adc_channel);
     return ESP_OK;
 }
 
 float battery_monitor_get_voltage(void)
 {
     int raw = 0;
-    esp_err_t err = adc_oneshot_read(s_adc_handle, BATTERY_ADC_CHANNEL, &raw);
+    esp_err_t err = adc_oneshot_read(s_adc_handle, s_adc_channel, &raw);
     if (err != ESP_OK) {
         return 0.0f;
     }
