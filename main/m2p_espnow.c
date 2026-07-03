@@ -18,8 +18,8 @@ static const char *TAG = "m2p_espnow";
 #define M2P_ESPNOW_RX_QUEUE_LEN 16
 #define M2P_ESPNOW_TX_POWER_QDBM 40 /* 10 dBm, unit is 0.25 dBm. */
 
-_Static_assert(sizeof(m2p_espnow_tracker_packet_t) <= ESP_NOW_MAX_DATA_LEN,
-               "tracker packet must fit in one ESP-NOW v1 packet");
+_Static_assert(sizeof(m2p_espnow_packet_t) <= ESP_NOW_MAX_DATA_LEN,
+               "MoveToPlay packet must fit in one ESP-NOW v1 packet");
 
 static const uint8_t s_broadcast_addr[ESP_NOW_ETH_ALEN] = {
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -64,11 +64,29 @@ static esp_err_t init_wifi(uint8_t channel)
     return ESP_OK;
 }
 
-static bool is_valid_tracker_packet(const m2p_espnow_tracker_packet_t *packet)
+static const char *role_name(m2p_espnow_role_t role)
 {
-    return packet->magic == M2P_ESPNOW_MAGIC &&
-           packet->version == M2P_ESPNOW_PACKET_VERSION &&
-           packet->type == M2P_ESPNOW_PACKET_TRACKER_IMU;
+    switch (role) {
+    case M2P_ESPNOW_ROLE_DONGLE:
+        return "dongle";
+    case M2P_ESPNOW_ROLE_TRACKER:
+        return "tracker";
+    case M2P_ESPNOW_ROLE_BLADE:
+        return "blade";
+    default:
+        return "unknown";
+    }
+}
+
+static bool is_valid_packet(const m2p_espnow_packet_t *packet)
+{
+    if (packet->magic != M2P_ESPNOW_MAGIC ||
+        packet->version != M2P_ESPNOW_PACKET_VERSION) {
+        return false;
+    }
+
+    return packet->type == M2P_ESPNOW_PACKET_TRACKER_IMU ||
+           packet->type == M2P_ESPNOW_PACKET_BLADE_STATE;
 }
 
 static void espnow_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int data_len)
@@ -77,7 +95,7 @@ static void espnow_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *
         return;
     }
 
-    if (data_len != sizeof(m2p_espnow_tracker_packet_t)) {
+    if (data_len != sizeof(m2p_espnow_packet_t)) {
         return;
     }
 
@@ -85,7 +103,7 @@ static void espnow_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *
     memcpy(rx_packet.src_addr, recv_info->src_addr, sizeof(rx_packet.src_addr));
     memcpy(&rx_packet.packet, data, sizeof(rx_packet.packet));
 
-    if (!is_valid_tracker_packet(&rx_packet.packet)) {
+    if (!is_valid_packet(&rx_packet.packet)) {
         return;
     }
 
@@ -135,7 +153,7 @@ esp_err_t m2p_espnow_init(m2p_espnow_role_t role, uint8_t channel)
 
     ESP_LOGI(TAG,
              "ESP-NOW init ok, role=%s, channel=%u, sta_mac=%02X:%02X:%02X:%02X:%02X:%02X, packet_size=%u",
-             role == M2P_ESPNOW_ROLE_DONGLE ? "dongle" : "tracker",
+             role_name(role),
              channel,
              sta_mac[0],
              sta_mac[1],
@@ -143,7 +161,7 @@ esp_err_t m2p_espnow_init(m2p_espnow_role_t role, uint8_t channel)
              sta_mac[3],
              sta_mac[4],
              sta_mac[5],
-             (unsigned)sizeof(m2p_espnow_tracker_packet_t));
+             (unsigned)sizeof(m2p_espnow_packet_t));
 
     s_espnow_ready = true;
     return ESP_OK;
@@ -156,7 +174,7 @@ esp_err_t m2p_espnow_send_tracker_sample(uint8_t node_id,
     ESP_RETURN_ON_FALSE(s_espnow_ready, ESP_ERR_INVALID_STATE, TAG, "esp-now not ready");
     ESP_RETURN_ON_FALSE(sample != NULL, ESP_ERR_INVALID_ARG, TAG, "sample is NULL");
 
-    m2p_espnow_tracker_packet_t packet = {
+    m2p_espnow_packet_t packet = {
         .magic = M2P_ESPNOW_MAGIC,
         .version = M2P_ESPNOW_PACKET_VERSION,
         .type = M2P_ESPNOW_PACKET_TRACKER_IMU,
@@ -174,6 +192,25 @@ esp_err_t m2p_espnow_send_tracker_sample(uint8_t node_id,
             sample->gyro_dps[1],
             sample->gyro_dps[2],
         },
+    };
+
+    return esp_now_send(s_broadcast_addr, (const uint8_t *)&packet, sizeof(packet));
+}
+
+esp_err_t m2p_espnow_send_blade_state(uint8_t node_id,
+                                       uint32_t sequence,
+                                       bool pressed)
+{
+    ESP_RETURN_ON_FALSE(s_espnow_ready, ESP_ERR_INVALID_STATE, TAG, "esp-now not ready");
+
+    m2p_espnow_packet_t packet = {
+        .magic = M2P_ESPNOW_MAGIC,
+        .version = M2P_ESPNOW_PACKET_VERSION,
+        .type = M2P_ESPNOW_PACKET_BLADE_STATE,
+        .node_id = node_id,
+        .flags = pressed ? M2P_ESPNOW_BLADE_FLAG_PRESSED : 0,
+        .sequence = sequence,
+        .timestamp_us = (uint32_t)esp_timer_get_time(),
     };
 
     return esp_now_send(s_broadcast_addr, (const uint8_t *)&packet, sizeof(packet));

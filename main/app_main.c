@@ -23,6 +23,7 @@ static const char *TAG = "imu_main";
 
 #define MOVE_TO_PLAY_MODE_DONGLE      0
 #define MOVE_TO_PLAY_MODE_TRACKER     1
+#define MOVE_TO_PLAY_MODE_BLADE       2
 
 /*
  * User build options.
@@ -30,6 +31,7 @@ static const char *TAG = "imu_main";
  * MOVE_TO_PLAY_DEVICE_MODE:
  *   MOVE_TO_PLAY_MODE_DONGLE  = USB dongle. Receive ESP-NOW packets and print them to serial.
  *   MOVE_TO_PLAY_MODE_TRACKER = Wearable tracker. Read IMU samples and send them by ESP-NOW.
+ *   MOVE_TO_PLAY_MODE_BLADE   = Blade button module. Read GPIO4 and send button state by ESP-NOW.
  *
  * DONGLE_ENABLE_USB_KEYBOARD:
  *   0 = serial output only. This is the current debug/default dongle behavior.
@@ -47,8 +49,12 @@ static const char *TAG = "imu_main";
  *
  * 2) 烧 tracker（身体节点）时：
  *    #define MOVE_TO_PLAY_DEVICE_MODE MOVE_TO_PLAY_MODE_TRACKER
+ *
+ * 3) 烧 Blade（剑形转向按键）时：
+ *    #define MOVE_TO_PLAY_DEVICE_MODE MOVE_TO_PLAY_MODE_BLADE
  */
 //#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_TRACKER
+//#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_BLADE
 #define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_DONGLE
 
 #define MOVE_TO_PLAY_ENABLE_ESPNOW        1
@@ -56,7 +62,7 @@ static const char *TAG = "imu_main";
 
 /*
  * DONGLE_DATA_COLLECT_MODE:
- *   0 = 动作识别串口查看模式。开启RF推理，只输出识别到的动作，不输出USB HID。
+ *   0 = 动作识别串口查看模式。开启RF推理，输出识别动作和Blade状态，不输出USB HID。
  *   1 = 数据采集模式。关闭推理和USB HID，只输出原始CSV供采集脚本使用。
  *   2 = 原神游玩模式。开启RF推理和USB HID键鼠映射。
  */
@@ -64,7 +70,7 @@ static const char *TAG = "imu_main";
 #define DONGLE_MODE_DATA_COLLECT          1
 #define DONGLE_MODE_PLAY                  2
 
-#define DONGLE_DATA_COLLECT_MODE          2
+#define DONGLE_DATA_COLLECT_MODE          0
 
 #if (DONGLE_DATA_COLLECT_MODE != DONGLE_MODE_SERIAL_VIEW) && \
     (DONGLE_DATA_COLLECT_MODE != DONGLE_MODE_DATA_COLLECT) && \
@@ -169,6 +175,18 @@ static const char *TAG = "imu_main";
 #define DONGLE_RF_MAX_NODE_AGE_MS     250
 #define DONGLE_RF_PRINT_INTERVAL_MS   120
 #define DONGLE_RF_MIN_CONFIDENCE      0.60f
+#define DONGLE_BLADE_MAX_AGE_MS       300
+#define DONGLE_BLADE_TURN_PERIOD_MS   40
+#define DONGLE_BLADE_TURN_MOUSE_DELTA 30 /* positive X = turn right */
+
+#define BLADE_NODE_ID                 100
+#define BLADE_BUTTON_GPIO             GPIO_NUM_4
+#define BLADE_REPORT_RATE_HZ          50
+#define BLADE_REPORT_PERIOD_MS        (1000 / BLADE_REPORT_RATE_HZ)
+#define BLADE_DEBOUNCE_SAMPLES        3
+#define BLADE_ENABLE_SERIAL_OUTPUT    1
+#define BLADE_SERIAL_STATE_RATE_HZ    10
+#define BLADE_SERIAL_STATE_PERIOD_MS  (1000 / BLADE_SERIAL_STATE_RATE_HZ)
 
 #define BATTERY_REPORT_INTERVAL_MS    5000
 
@@ -187,8 +205,9 @@ static const char *TAG = "imu_main";
 #define USB_MOUSE_TEST_STEP_MS            120
 
 #if (MOVE_TO_PLAY_DEVICE_MODE != MOVE_TO_PLAY_MODE_DONGLE) && \
-    (MOVE_TO_PLAY_DEVICE_MODE != MOVE_TO_PLAY_MODE_TRACKER)
-#error "MOVE_TO_PLAY_DEVICE_MODE must be 0 (dongle) or 1 (tracker)"
+    (MOVE_TO_PLAY_DEVICE_MODE != MOVE_TO_PLAY_MODE_TRACKER) && \
+    (MOVE_TO_PLAY_DEVICE_MODE != MOVE_TO_PLAY_MODE_BLADE)
+#error "MOVE_TO_PLAY_DEVICE_MODE must be 0 (dongle), 1 (tracker), or 2 (blade)"
 #endif
 
 #if DONGLE_ENABLE_USB_KEYBOARD_TEST && !DONGLE_ENABLE_USB_KEYBOARD
@@ -201,6 +220,10 @@ static const char *TAG = "imu_main";
 
 #if DONGLE_SERIAL_STATE_RATE_HZ <= 0
 #error "DONGLE_SERIAL_STATE_RATE_HZ must be greater than 0"
+#endif
+
+#if BLADE_ENABLE_SERIAL_OUTPUT && BLADE_SERIAL_STATE_RATE_HZ <= 0
+#error "BLADE_SERIAL_STATE_RATE_HZ must be greater than 0"
 #endif
 
 #if (MOVE_TO_PLAY_TRACKER_NODE_ID < 1) || (MOVE_TO_PLAY_TRACKER_NODE_ID > DONGLE_MAX_TRACKER_NODES)
@@ -355,7 +378,22 @@ typedef struct {
     m2p_espnow_tracker_packet_t packet;
 } dongle_latest_node_t;
 
+typedef struct {
+    bool valid;
+    bool pressed;
+    bool dirty;
+    uint8_t src_addr[6];
+    uint8_t node_id;
+    uint32_t sequence;
+    uint32_t timestamp_us;
+    int64_t last_rx_us;
+} dongle_blade_state_t;
+
 static dongle_latest_node_t s_dongle_latest_nodes[DONGLE_MAX_TRACKER_NODES];
+static dongle_blade_state_t s_dongle_blade_state;
+#if DONGLE_ENABLE_USB_MOUSE
+static int64_t s_dongle_last_blade_turn_us = 0;
+#endif
 #if DONGLE_ENABLE_ACTION_DEBUG_OUTPUT
 static int64_t s_dongle_last_rf_print_us = 0;
 #endif
@@ -371,6 +409,10 @@ static dongle_latest_node_t *dongle_latest_node_for_id(uint8_t node_id)
 
 static void dongle_store_latest_packet(const m2p_espnow_rx_packet_t *rx_packet)
 {
+    if (rx_packet->packet.type != M2P_ESPNOW_PACKET_TRACKER_IMU) {
+        return;
+    }
+
     const uint8_t node_id = rx_packet->packet.node_id;
     dongle_latest_node_t *node = dongle_latest_node_for_id(node_id);
     if (node == NULL) {
@@ -389,6 +431,116 @@ static void dongle_store_latest_packet(const m2p_espnow_rx_packet_t *rx_packet)
     node->last_rx_us = esp_timer_get_time();
     memcpy(node->src_addr, rx_packet->src_addr, sizeof(node->src_addr));
     node->packet = rx_packet->packet;
+}
+
+static void dongle_store_blade_packet(const m2p_espnow_rx_packet_t *rx_packet)
+{
+    if (rx_packet->packet.type != M2P_ESPNOW_PACKET_BLADE_STATE) {
+        return;
+    }
+
+    const bool pressed =
+        (rx_packet->packet.flags & M2P_ESPNOW_BLADE_FLAG_PRESSED) != 0;
+    const bool changed = !s_dongle_blade_state.valid ||
+                         s_dongle_blade_state.pressed != pressed;
+
+    if (!s_dongle_blade_state.valid) {
+        ESP_LOGI(TAG,
+                 "blade online: node_id=%u",
+                 rx_packet->packet.node_id);
+    }
+
+    s_dongle_blade_state.valid = true;
+    s_dongle_blade_state.pressed = pressed;
+    s_dongle_blade_state.dirty = s_dongle_blade_state.dirty || changed;
+    s_dongle_blade_state.node_id = rx_packet->packet.node_id;
+    s_dongle_blade_state.sequence = rx_packet->packet.sequence;
+    s_dongle_blade_state.timestamp_us = rx_packet->packet.timestamp_us;
+    s_dongle_blade_state.last_rx_us = esp_timer_get_time();
+    memcpy(s_dongle_blade_state.src_addr,
+           rx_packet->src_addr,
+           sizeof(s_dongle_blade_state.src_addr));
+}
+
+static double dongle_blade_age_ms(int64_t now_us)
+{
+    if (!s_dongle_blade_state.valid || s_dongle_blade_state.last_rx_us <= 0) {
+        return -1.0;
+    }
+
+    const int64_t age_us = now_us - s_dongle_blade_state.last_rx_us;
+    if (age_us < 0) {
+        return -1.0;
+    }
+
+    return (double)age_us / 1000.0;
+}
+
+static bool dongle_blade_state_fresh(int64_t now_us)
+{
+    const double age_ms = dongle_blade_age_ms(now_us);
+    return age_ms >= 0.0 && age_ms <= (double)DONGLE_BLADE_MAX_AGE_MS;
+}
+
+static void dongle_print_blade_state_if_changed(int64_t now_us)
+{
+    if (!s_dongle_blade_state.valid || !s_dongle_blade_state.dirty) {
+        return;
+    }
+
+    const double age_ms = dongle_blade_age_ms(now_us);
+
+    printf("# blade: node_id=%u pressed=%d seq=%" PRIu32 " age_ms=%.1f\n",
+           s_dongle_blade_state.node_id,
+           s_dongle_blade_state.pressed ? 1 : 0,
+           s_dongle_blade_state.sequence,
+           age_ms);
+
+    s_dongle_blade_state.dirty = false;
+}
+
+#if DONGLE_ENABLE_USB_MOUSE
+static bool dongle_blade_pressed_fresh(int64_t now_us)
+{
+    return s_dongle_blade_state.valid &&
+           s_dongle_blade_state.pressed &&
+           dongle_blade_state_fresh(now_us);
+}
+#endif
+
+static void dongle_handle_blade_turn(int64_t now_us)
+{
+#if !DONGLE_ENABLE_USB_MOUSE
+    (void)now_us;
+    return;
+#else
+    if (!dongle_blade_pressed_fresh(now_us)) {
+        return;
+    }
+
+    if (s_dongle_last_blade_turn_us > 0) {
+        const int64_t elapsed_us = now_us - s_dongle_last_blade_turn_us;
+        if (elapsed_us >= 0 &&
+            elapsed_us < ((int64_t)DONGLE_BLADE_TURN_PERIOD_MS * 1000LL)) {
+            return;
+        }
+    }
+
+    esp_err_t err = ESP_OK;
+    if (!usb_mouse_is_ready()) {
+        return;
+    }
+    err = usb_mouse_move((int8_t)DONGLE_BLADE_TURN_MOUSE_DELTA, 0, 0, 0);
+    if (err == ESP_OK) {
+        s_dongle_last_blade_turn_us = now_us;
+    }
+
+#if DONGLE_ENABLE_HID_EVENT_LOG
+    printf("# blade-hid: pressed=1 dx=%d result=%s\n",
+           DONGLE_BLADE_TURN_MOUSE_DELTA,
+           esp_err_to_name(err));
+#endif
+#endif
 }
 
 #if DONGLE_ENABLE_RAW_CSV_OUTPUT
@@ -432,16 +584,20 @@ static void dongle_print_latest_node(dongle_latest_node_t *node, int64_t now_us)
 
 static void dongle_print_latest_states(void)
 {
-#if DONGLE_ENABLE_RAW_CSV_OUTPUT
     const int64_t now_us = esp_timer_get_time();
 
+#if DONGLE_ENABLE_RAW_CSV_OUTPUT
     for (size_t i = 0; i < DONGLE_MAX_TRACKER_NODES; i++) {
         dongle_latest_node_t *node = &s_dongle_latest_nodes[i];
         if (node->valid && node->dirty) {
             dongle_print_latest_node(node, now_us);
         }
     }
+#else
+    dongle_print_blade_state_if_changed(now_us);
 #endif
+
+    dongle_handle_blade_turn(now_us);
 }
 
 #if DONGLE_ENABLE_RF_INFERENCE
@@ -1264,10 +1420,15 @@ static void dongle_run_rf_inference(int64_t now_us)
                              dongle_action_class_name(s_dongle_last_hid_trigger_class) : "none";
     const char *hid_event = s_dongle_hid_trigger_since_last_print ?
                             s_dongle_last_hid_trigger_event : "none";
+    const double blade_age_ms = dongle_blade_age_ms(now_us);
+    const bool blade_valid = s_dongle_blade_state.valid;
+    const bool blade_fresh = dongle_blade_state_fresh(now_us);
     printf("# infer: action=%s conf=%.2f frames=%" PRIu32
            " hid_trigger=%d hid_count=%" PRIu32 " hid_ready=%d hid_status=%s"
            " hid_action=%s hid_event=%s"
-           " max_age_ms=%.1f infer_us=%" PRId64 "\n",
+           " max_age_ms=%.1f infer_us=%" PRId64
+           " blade_valid=%d blade_pressed=%d blade_fresh=%d"
+           " blade_seq=%" PRIu32 " blade_age_ms=%.1f\n",
            display_label,
            (double)result_confidence,
            result_frames,
@@ -1278,7 +1439,12 @@ static void dongle_run_rf_inference(int64_t now_us)
            hid_action,
            hid_event,
            max_age_ms,
-           infer_elapsed_us);
+           infer_elapsed_us,
+           blade_valid ? 1 : 0,
+           (blade_valid && s_dongle_blade_state.pressed) ? 1 : 0,
+           blade_fresh ? 1 : 0,
+           blade_valid ? s_dongle_blade_state.sequence : 0,
+           blade_age_ms);
     s_dongle_hid_trigger_since_last_print = false;
     s_dongle_hid_trigger_count_since_last_print = 0;
     s_dongle_last_hid_trigger_class = DONGLE_IDLE_CLASS;
@@ -1297,7 +1463,7 @@ static void espnow_rx_task(void *arg)
     TickType_t last_print_tick = xTaskGetTickCount();
 #endif
 
-    ESP_LOGI(TAG, "dongle waiting for ESP-NOW tracker packets");
+    ESP_LOGI(TAG, "dongle waiting for ESP-NOW tracker/blade packets");
 
     while (1) {
         m2p_espnow_rx_packet_t rx_packet = {0};
@@ -1319,7 +1485,11 @@ static void espnow_rx_task(void *arg)
 
         if (m2p_espnow_receive(&rx_packet, wait_ms)) {
 #if DONGLE_ENABLE_SERIAL_OUTPUT
-            dongle_store_latest_packet(&rx_packet);
+            if (rx_packet.packet.type == M2P_ESPNOW_PACKET_TRACKER_IMU) {
+                dongle_store_latest_packet(&rx_packet);
+            } else if (rx_packet.packet.type == M2P_ESPNOW_PACKET_BLADE_STATE) {
+                dongle_store_blade_packet(&rx_packet);
+            }
 #endif
         }
 
@@ -1420,6 +1590,97 @@ static void usb_mouse_test_task(void *arg)
     vTaskDelete(NULL);
 }
 #endif
+
+static esp_err_t blade_button_init(void)
+{
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << (uint32_t)BLADE_BUTTON_GPIO),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+
+    return gpio_config(&io_conf);
+}
+
+static bool blade_button_is_pressed(void)
+{
+    return gpio_get_level(BLADE_BUTTON_GPIO) == 0;
+}
+
+static void blade_report_task(void *arg)
+{
+    (void)arg;
+
+    TickType_t last_wake = xTaskGetTickCount();
+    uint32_t sequence = 0;
+    bool last_raw_pressed = blade_button_is_pressed();
+    bool stable_pressed = last_raw_pressed;
+    uint8_t same_sample_count = BLADE_DEBOUNCE_SAMPLES;
+#if BLADE_ENABLE_SERIAL_OUTPUT
+    TickType_t last_serial_tick = 0;
+    bool force_serial_print = true;
+#endif
+
+    led_set(stable_pressed);
+    ESP_LOGI(TAG, "blade button initial state: %s",
+             stable_pressed ? "pressed" : "released");
+
+    while (1) {
+        bool state_changed = false;
+        const int gpio_level = gpio_get_level(BLADE_BUTTON_GPIO);
+        const bool raw_pressed = gpio_level == 0;
+        if (raw_pressed == last_raw_pressed) {
+            if (same_sample_count < BLADE_DEBOUNCE_SAMPLES) {
+                same_sample_count++;
+            }
+        } else {
+            last_raw_pressed = raw_pressed;
+            same_sample_count = 1;
+        }
+
+        if (same_sample_count >= BLADE_DEBOUNCE_SAMPLES &&
+            stable_pressed != last_raw_pressed) {
+            stable_pressed = last_raw_pressed;
+            state_changed = true;
+            led_set(stable_pressed);
+            ESP_LOGI(TAG, "blade button state: %s",
+                     stable_pressed ? "pressed" : "released");
+        }
+
+        esp_err_t send_err = ESP_OK;
+#if MOVE_TO_PLAY_ENABLE_ESPNOW
+        send_err = m2p_espnow_send_blade_state(BLADE_NODE_ID, sequence, stable_pressed);
+        if (send_err != ESP_OK &&
+            (sequence % BLADE_REPORT_RATE_HZ) == 0) {
+            ESP_LOGW(TAG,
+                     "ESP-NOW blade state send failed: %s",
+                     esp_err_to_name(send_err));
+        }
+#endif
+#if BLADE_ENABLE_SERIAL_OUTPUT
+        const TickType_t now_tick = xTaskGetTickCount();
+        if (force_serial_print ||
+            state_changed ||
+            (now_tick - last_serial_tick) >= pdMS_TO_TICKS(BLADE_SERIAL_STATE_PERIOD_MS)) {
+            printf("# blade-tx: node_id=%u pressed=%d raw_pressed=%d gpio=%d"
+                   " seq=%" PRIu32 " send=%s\n",
+                   BLADE_NODE_ID,
+                   stable_pressed ? 1 : 0,
+                   raw_pressed ? 1 : 0,
+                   gpio_level,
+                   sequence,
+                   esp_err_to_name(send_err));
+            last_serial_tick = now_tick;
+            force_serial_print = false;
+        }
+#endif
+        sequence++;
+
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(BLADE_REPORT_PERIOD_MS));
+    }
+}
 
 static void start_dongle_mode(void)
 {
@@ -1539,6 +1800,42 @@ static void start_tracker_mode(void)
                             tskNO_AFFINITY);
 }
 
+static void start_blade_mode(void)
+{
+    ESP_LOGI(TAG, "Starting Blade mode");
+    ESP_LOGI(TAG, "role: read GPIO%d active-low button and send Blade state",
+             BLADE_BUTTON_GPIO);
+    ESP_LOGI(TAG, "node_id=%d", BLADE_NODE_ID);
+    ESP_LOGI(TAG, "esp-now channel=%d", M2P_ESPNOW_CHANNEL);
+    ESP_LOGI(TAG, "report_rate_hz=%d", BLADE_REPORT_RATE_HZ);
+
+    led_set(false);
+
+    esp_err_t button_err = blade_button_init();
+    if (button_err != ESP_OK) {
+        ESP_LOGE(TAG, "Blade button GPIO init failed: %s", esp_err_to_name(button_err));
+        return;
+    }
+
+#if MOVE_TO_PLAY_ENABLE_ESPNOW
+    esp_err_t espnow_err = m2p_espnow_init(M2P_ESPNOW_ROLE_BLADE, M2P_ESPNOW_CHANNEL);
+    if (espnow_err != ESP_OK) {
+        ESP_LOGW(TAG, "ESP-NOW init failed: %s", esp_err_to_name(espnow_err));
+        return;
+    }
+#else
+    ESP_LOGI(TAG, "ESP-NOW disabled by MOVE_TO_PLAY_ENABLE_ESPNOW");
+#endif
+
+    xTaskCreatePinnedToCore(blade_report_task,
+                            "blade_report_task",
+                            3072,
+                            NULL,
+                            6,
+                            NULL,
+                            tskNO_AFFINITY);
+}
+
 static void battery_monitor_task(void *arg)
 {
     (void)arg;
@@ -1569,11 +1866,12 @@ void app_main(void)
     led_blink_startup(3, 120, 120);
 
     ESP_LOGI(TAG, "Booting MoveToPlay");
-    ESP_LOGI(TAG, "device_mode=%d (0=dongle, 1=tracker)", MOVE_TO_PLAY_DEVICE_MODE);
+    ESP_LOGI(TAG, "device_mode=%d (0=dongle, 1=tracker, 2=blade)",
+             MOVE_TO_PLAY_DEVICE_MODE);
 
     if (MOVE_TO_PLAY_DEVICE_MODE == MOVE_TO_PLAY_MODE_DONGLE) {
         start_dongle_mode();
-    } else {
+    } else if (MOVE_TO_PLAY_DEVICE_MODE == MOVE_TO_PLAY_MODE_TRACKER) {
         xTaskCreatePinnedToCore(battery_monitor_task,
                                 "battery_task",
                                 3072,
@@ -1582,5 +1880,7 @@ void app_main(void)
                                 NULL,
                                 tskNO_AFFINITY);
         start_tracker_mode();
+    } else {
+        start_blade_mode();
     }
 }
