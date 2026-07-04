@@ -153,8 +153,16 @@ static const char *TAG = "imu_main";
 #define DONGLE_RF_PRINT_INTERVAL_MS   120
 #define DONGLE_RF_MIN_CONFIDENCE      0.60f
 #define DONGLE_BLADE_MAX_AGE_MS       300
-#define DONGLE_BLADE_TURN_PERIOD_MS   40
-#define DONGLE_BLADE_TURN_MOUSE_DELTA 30 /* positive X = turn right */
+#define DONGLE_BLADE_TURN_PERIOD_MS   20
+#define DONGLE_BLADE_TURN_CHEST_NODE_ID TRACKER_NODE_CHEST
+/* 0=gx, 1=gy, 2=gz. Current turn data shows chest gy has the strongest left/right yaw signal. */
+#define DONGLE_BLADE_TURN_GYRO_AXIS   1
+/* Mouse X is positive for turning right. With the current chest mounting, gy positive means left. */
+#define DONGLE_BLADE_TURN_GYRO_SIGN   -1.0f
+#define DONGLE_BLADE_TURN_DEADZONE_DPS 8.0f
+#define DONGLE_BLADE_TURN_SENSITIVITY 6.0f /* mouse px per integrated gyro degree */
+#define DONGLE_BLADE_TURN_MAX_STEP_DELTA 80
+#define DONGLE_BLADE_TURN_CHEST_MAX_AGE_MS 150
 
 #define BLADE_NODE_ID                 100
 #define BLADE_BUTTON_GPIO             GPIO_NUM_4
@@ -374,6 +382,7 @@ static dongle_latest_node_t s_dongle_latest_nodes[DONGLE_MAX_TRACKER_NODES];
 static dongle_blade_state_t s_dongle_blade_state;
 #if DONGLE_ENABLE_USB_MOUSE
 static int64_t s_dongle_last_blade_turn_us = 0;
+static float s_dongle_blade_turn_dx_remainder = 0.0f;
 #endif
 #if DONGLE_ENABLE_ACTION_DEBUG_OUTPUT
 static int64_t s_dongle_last_rf_print_us = 0;
@@ -480,12 +489,50 @@ static void dongle_print_blade_state_if_changed(int64_t now_us)
     s_dongle_blade_state.dirty = false;
 }
 
-#if DONGLE_ENABLE_USB_MOUSE
 static bool dongle_blade_pressed_fresh(int64_t now_us)
 {
     return s_dongle_blade_state.valid &&
            s_dongle_blade_state.pressed &&
            dongle_blade_state_fresh(now_us);
+}
+
+#if DONGLE_ENABLE_USB_MOUSE
+static float dongle_blade_turn_gyro_dps(const m2p_espnow_tracker_packet_t *packet)
+{
+    switch (DONGLE_BLADE_TURN_GYRO_AXIS) {
+    case 0:
+        return packet->gyro_dps[0];
+    case 1:
+        return packet->gyro_dps[1];
+    case 2:
+        return packet->gyro_dps[2];
+    default:
+        return 0.0f;
+    }
+}
+
+static bool dongle_get_fresh_chest_packet(int64_t now_us,
+                                          const m2p_espnow_tracker_packet_t **out_packet,
+                                          double *out_age_ms)
+{
+    dongle_latest_node_t *node = dongle_latest_node_for_id(DONGLE_BLADE_TURN_CHEST_NODE_ID);
+    if (node == NULL || !node->valid || node->last_rx_us <= 0) {
+        return false;
+    }
+
+    const int64_t age_us = now_us - node->last_rx_us;
+    if (age_us < 0 ||
+        age_us > ((int64_t)DONGLE_BLADE_TURN_CHEST_MAX_AGE_MS * 1000LL)) {
+        return false;
+    }
+
+    if (out_packet != NULL) {
+        *out_packet = &node->packet;
+    }
+    if (out_age_ms != NULL) {
+        *out_age_ms = (double)age_us / 1000.0;
+    }
+    return true;
 }
 #endif
 
@@ -496,6 +543,8 @@ static void dongle_handle_blade_turn(int64_t now_us)
     return;
 #else
     if (!dongle_blade_pressed_fresh(now_us)) {
+        s_dongle_last_blade_turn_us = 0;
+        s_dongle_blade_turn_dx_remainder = 0.0f;
         return;
     }
 
@@ -507,18 +556,66 @@ static void dongle_handle_blade_turn(int64_t now_us)
         }
     }
 
+    const m2p_espnow_tracker_packet_t *chest_packet = NULL;
+    double chest_age_ms = -1.0;
+    if (!dongle_get_fresh_chest_packet(now_us, &chest_packet, &chest_age_ms)) {
+        s_dongle_last_blade_turn_us = 0;
+        s_dongle_blade_turn_dx_remainder = 0.0f;
+        return;
+    }
+
+    if (s_dongle_last_blade_turn_us <= 0) {
+        s_dongle_last_blade_turn_us = now_us;
+        return;
+    }
+
+    const int64_t elapsed_us = now_us - s_dongle_last_blade_turn_us;
+    if (elapsed_us <= 0) {
+        return;
+    }
+
+    float gyro_dps = dongle_blade_turn_gyro_dps(chest_packet) * DONGLE_BLADE_TURN_GYRO_SIGN;
+    if (gyro_dps > -DONGLE_BLADE_TURN_DEADZONE_DPS &&
+        gyro_dps < DONGLE_BLADE_TURN_DEADZONE_DPS) {
+        gyro_dps = 0.0f;
+    }
+
+    const float dt_s = (float)elapsed_us / 1000000.0f;
+    float dx_f = (gyro_dps * dt_s * DONGLE_BLADE_TURN_SENSITIVITY) +
+                 s_dongle_blade_turn_dx_remainder;
+    int16_t dx = (int16_t)((dx_f >= 0.0f) ? (dx_f + 0.5f) : (dx_f - 0.5f));
+    bool dx_saturated = false;
+    if (dx > DONGLE_BLADE_TURN_MAX_STEP_DELTA) {
+        dx = DONGLE_BLADE_TURN_MAX_STEP_DELTA;
+        dx_saturated = true;
+    } else if (dx < -DONGLE_BLADE_TURN_MAX_STEP_DELTA) {
+        dx = -DONGLE_BLADE_TURN_MAX_STEP_DELTA;
+        dx_saturated = true;
+    }
+    s_dongle_blade_turn_dx_remainder = dx_saturated ? 0.0f : (dx_f - (float)dx);
+
+    if (dx == 0) {
+        s_dongle_last_blade_turn_us = now_us;
+        return;
+    }
+
     esp_err_t err = ESP_OK;
     if (!usb_mouse_is_ready()) {
         return;
     }
-    err = usb_mouse_move((int8_t)DONGLE_BLADE_TURN_MOUSE_DELTA, 0, 0, 0);
+    err = usb_mouse_move((int8_t)dx, 0, 0, 0);
     if (err == ESP_OK) {
         s_dongle_last_blade_turn_us = now_us;
     }
 
 #if DONGLE_ENABLE_HID_EVENT_LOG
-    printf("# blade-hid: pressed=1 dx=%d result=%s\n",
-           DONGLE_BLADE_TURN_MOUSE_DELTA,
+    printf("# blade-hid: pressed=1 chest_node=%u axis=%d gyro_dps=%.1f"
+           " chest_age_ms=%.1f dx=%d result=%s\n",
+           (unsigned)DONGLE_BLADE_TURN_CHEST_NODE_ID,
+           DONGLE_BLADE_TURN_GYRO_AXIS,
+           (double)gyro_dps,
+           chest_age_ms,
+           dx,
            esp_err_to_name(err));
 #endif
 #endif
@@ -652,9 +749,9 @@ static const dongle_key_action_t s_class_key_actions[RF_MODEL_CLASS_COUNT] = {
     [3] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* idle */
     [4] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 1000, 0 },  /* jump -> SPACE */
     [5] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_E, TRIGGER_COOLDOWN, 1000, 0 },  /* kick -> E */
-    [6] = { ACTION_TYPE_MOUSE_MOVE_LEFT, 0, 0, TRIGGER_REPEAT, DONGLE_VIEW_ACTION_INTERVAL_MS, 1 }, /* left_hand_raise -> mouse left */
+    [6] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* left_hand_raise: view turn is handled by Blade + chest gyro */
     [7] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* move_noise */
-    [8] = { ACTION_TYPE_MOUSE_MOVE_RIGHT, 0, 0, TRIGGER_REPEAT, DONGLE_VIEW_ACTION_INTERVAL_MS, 1 }, /* right_hand_raise -> mouse right */
+    [8] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* right_hand_raise: view turn is handled by Blade + chest gyro */
     [9] = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_REPEAT, DONGLE_SLASH_CLICK_INTERVAL_MS, 1 }, /* right_hand_slash -> left click every 500ms */
     [10] = { ACTION_TYPE_KEY_HOLD, USB_KEYBOARD_MOD_LEFT_SHIFT, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 }, /* run -> Shift+W */
     [11] = { ACTION_TYPE_MOUSE_TURN_LEFT, 0, 0, TRIGGER_REPEAT, DONGLE_VIEW_ACTION_INTERVAL_MS, 1 }, /* turn_left -> mouse left */
@@ -942,9 +1039,7 @@ static bool dongle_is_turn_class(uint8_t class_idx)
 
 static bool dongle_is_view_move_class(uint8_t class_idx)
 {
-    return class_idx == DONGLE_LEFT_HAND_RAISE_CLASS ||
-           class_idx == DONGLE_RIGHT_HAND_RAISE_CLASS ||
-           class_idx == DONGLE_TURN_LEFT_CLASS ||
+    return class_idx == DONGLE_TURN_LEFT_CLASS ||
            class_idx == DONGLE_TURN_RIGHT_CLASS;
 }
 
