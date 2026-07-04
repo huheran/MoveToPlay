@@ -26,52 +26,71 @@ static const char *TAG = "imu_main";
 #define MOVE_TO_PLAY_MODE_TRACKER     1
 #define MOVE_TO_PLAY_MODE_BLADE       2
 
-/*
- * User build options.
- *
- * MOVE_TO_PLAY_DEVICE_MODE:
- *   MOVE_TO_PLAY_MODE_DONGLE  = USB dongle. Receive ESP-NOW packets and print them to serial.
- *   MOVE_TO_PLAY_MODE_TRACKER = Wearable tracker. Read IMU samples and send them by ESP-NOW.
- *   MOVE_TO_PLAY_MODE_BLADE   = Blade button module. Read GPIO4 and send button state by ESP-NOW.
- *
- * DONGLE_ENABLE_USB_KEYBOARD:
- *   0 = serial output only. This is the current debug/default dongle behavior.
- *   1 = enable TinyUSB HID keyboard support for later game-control tests.
- *
- * DONGLE_ENABLE_USB_MOUSE:
- *   0 = disable USB mouse report output.
- *   1 = enable TinyUSB HID mouse support on the same USB HID device.
- */
-/*
- * [烧录前先改这里]
- *
- * 1) 烧 dongle（接收端）时：
- *    #define MOVE_TO_PLAY_DEVICE_MODE MOVE_TO_PLAY_MODE_DONGLE
- *
- * 2) 烧 tracker（身体节点）时：
- *    #define MOVE_TO_PLAY_DEVICE_MODE MOVE_TO_PLAY_MODE_TRACKER
- *
- * 3) 烧 Blade（剑形转向按键）时：
- *    #define MOVE_TO_PLAY_DEVICE_MODE MOVE_TO_PLAY_MODE_BLADE
- */
-//#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_TRACKER
-#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_BLADE
-//#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_DONGLE
-
-#define MOVE_TO_PLAY_ENABLE_ESPNOW        1
-#define MOVE_TO_PLAY_ESPNOW_SEND_SAMPLES  1
-
-/*
- * DONGLE_DATA_COLLECT_MODE:
- *   0 = 动作识别串口查看模式。开启RF推理，输出识别动作和Blade状态，不输出USB HID。
- *   1 = 数据采集模式。关闭推理和USB HID，只输出原始CSV供采集脚本使用。
- *   2 = 原神游玩模式。开启RF推理和USB HID键鼠映射。
- */
 #define DONGLE_MODE_SERIAL_VIEW           0
 #define DONGLE_MODE_DATA_COLLECT          1
 #define DONGLE_MODE_PLAY                  2
 
-#define DONGLE_DATA_COLLECT_MODE          0
+#define TRACKER_NODE_CHEST            1
+#define TRACKER_NODE_RIGHT_HAND       2
+#define TRACKER_NODE_LEFT_HAND        3
+#define TRACKER_NODE_LEG              4
+
+#define M2P_PROFILE_DONGLE            1
+#define M2P_PROFILE_BLADE             2
+#define M2P_PROFILE_TRACKER_CHEST     3
+#define M2P_PROFILE_TRACKER_RIGHT_HAND 4
+#define M2P_PROFILE_TRACKER_LEFT_HAND 5
+#define M2P_PROFILE_TRACKER_LEG       6
+
+
+
+/* 烧录前只改这里。
+ * M2P_BOARD_PROFILE: 1=dongle, 2=blade, 3=chest, 4=right_hand, 5=left_hand, 6=leg
+ * M2P_DONGLE_MODE:   0=view, 1=collect, 2=play
+ * *_BOARD_STYLE:     0=current, 1=new
+ */
+#define M2P_BOARD_PROFILE             1
+#define M2P_DONGLE_MODE               2
+
+#define M2P_CHEST_BOARD_STYLE         1
+#define M2P_RIGHT_HAND_BOARD_STYLE    1
+#define M2P_LEFT_HAND_BOARD_STYLE     1
+#define M2P_LEG_BOARD_STYLE           1
+
+
+#if M2P_BOARD_PROFILE == M2P_PROFILE_DONGLE
+#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_DONGLE
+#define MOVE_TO_PLAY_TRACKER_NODE_ID  TRACKER_NODE_CHEST
+#define MOVE_TO_PLAY_TRACKER_BOARD_STYLE M2P_CHEST_BOARD_STYLE
+#elif M2P_BOARD_PROFILE == M2P_PROFILE_BLADE
+#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_BLADE
+#define MOVE_TO_PLAY_TRACKER_NODE_ID  TRACKER_NODE_CHEST
+#define MOVE_TO_PLAY_TRACKER_BOARD_STYLE M2P_CHEST_BOARD_STYLE
+#elif M2P_BOARD_PROFILE == M2P_PROFILE_TRACKER_CHEST
+#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_TRACKER
+#define MOVE_TO_PLAY_TRACKER_NODE_ID  TRACKER_NODE_CHEST
+#define MOVE_TO_PLAY_TRACKER_BOARD_STYLE M2P_CHEST_BOARD_STYLE
+#elif M2P_BOARD_PROFILE == M2P_PROFILE_TRACKER_RIGHT_HAND
+#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_TRACKER
+#define MOVE_TO_PLAY_TRACKER_NODE_ID  TRACKER_NODE_RIGHT_HAND
+#define MOVE_TO_PLAY_TRACKER_BOARD_STYLE M2P_RIGHT_HAND_BOARD_STYLE
+#elif M2P_BOARD_PROFILE == M2P_PROFILE_TRACKER_LEFT_HAND
+#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_TRACKER
+#define MOVE_TO_PLAY_TRACKER_NODE_ID  TRACKER_NODE_LEFT_HAND
+#define MOVE_TO_PLAY_TRACKER_BOARD_STYLE M2P_LEFT_HAND_BOARD_STYLE
+#elif M2P_BOARD_PROFILE == M2P_PROFILE_TRACKER_LEG
+#define MOVE_TO_PLAY_DEVICE_MODE      MOVE_TO_PLAY_MODE_TRACKER
+#define MOVE_TO_PLAY_TRACKER_NODE_ID  TRACKER_NODE_LEG
+#define MOVE_TO_PLAY_TRACKER_BOARD_STYLE M2P_LEG_BOARD_STYLE
+#else
+#error "M2P_BOARD_PROFILE must be 1(dongle), 2(blade), 3(chest), 4(right_hand), 5(left_hand), or 6(leg)"
+#endif
+
+#define DONGLE_DATA_COLLECT_MODE      M2P_DONGLE_MODE
+#define BOARD_NODE_ID                 MOVE_TO_PLAY_TRACKER_NODE_ID
+
+#define MOVE_TO_PLAY_ENABLE_ESPNOW        1
+#define MOVE_TO_PLAY_ESPNOW_SEND_SAMPLES  1
 
 #if (DONGLE_DATA_COLLECT_MODE != DONGLE_MODE_SERIAL_VIEW) && \
     (DONGLE_DATA_COLLECT_MODE != DONGLE_MODE_DATA_COLLECT) && \
@@ -119,49 +138,6 @@ static const char *TAG = "imu_main";
 #define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
 #define DONGLE_ENABLE_USB_MOUSE_TEST      0
 #endif
-
-#define TRACKER_NODE_CHEST            1
-#define TRACKER_NODE_RIGHT_HAND       2
-#define TRACKER_NODE_LEFT_HAND        3
-#define TRACKER_NODE_LEG              4
-
-/*
- * [如果上面选的是 TRACKER，再改这里]
- *
- * 给这块 tracker 板子分配身体位置编号。
- * 每烧一块 tracker，只改下面这一行即可：
- *
- *   TRACKER_NODE_CHEST       胸部
- *   TRACKER_NODE_RIGHT_HAND  右手
- *   TRACKER_NODE_LEFT_HAND   左手
- *   TRACKER_NODE_LEG         腿部
- *
- * 例子：
- *   胸部板     -> TRACKER_NODE_CHEST
- *   右手板     -> TRACKER_NODE_RIGHT_HAND
- *   左手板     -> TRACKER_NODE_LEFT_HAND
- *   腿部板     -> TRACKER_NODE_LEG
- */
-#define MOVE_TO_PLAY_TRACKER_NODE_ID  TRACKER_NODE_RIGHT_HAND
-
-#define BOARD_NODE_ID                 MOVE_TO_PLAY_TRACKER_NODE_ID
-
-/*
- * [如果上面选的是 TRACKER，再改这里]
- *
- * 选择当前烧录的 tracker 板子硬件版本：
- *
- *   0 = 当前旧板子
- *       IMU: SCLK=GPIO12, MOSI=GPIO11, MISO=GPIO9,  CS=GPIO10
- *       SK6812 指示灯: GPIO38
- *       电池电量检测: GPIO4
- *
- *   1 = 新画的板子
- *       IMU: SCLK=GPIO13, MOSI=GPIO12, MISO=GPIO11, CS=GPIO14
- *       SK6812 指示灯: GPIO38
- *       电池电量检测: GPIO2
- */
-#define MOVE_TO_PLAY_TRACKER_BOARD_STYLE 0
 
 #include "move_to_play_board_config.h"
 
