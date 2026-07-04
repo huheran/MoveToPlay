@@ -692,6 +692,7 @@ static void dongle_print_latest_states(void)
 #define DONGLE_OPPOSITE_TURN_BLOCK_MS 800
 #define DONGLE_STATE_RESUME_GRACE_MS  200
 #define DONGLE_STATE_EVENT_BRIDGE_MS  320
+#define DONGLE_BLADE_MOVE_HOLD_GRACE_MS 300
 #define DONGLE_CONFIRM_FRAMES         3
 #define DONGLE_INFER_RATE_HZ          25
 
@@ -1059,6 +1060,28 @@ static bool dongle_is_active_state_class(uint8_t class_idx)
            class_idx == DONGLE_WALK_CLASS;
 }
 
+static bool dongle_release_stale_keyboard_hold_during_blade_turn(int64_t now_us)
+{
+    if (s_dongle_keyboard_hold_class < 0) {
+        return false;
+    }
+
+    const uint8_t hold_class = (uint8_t)s_dongle_keyboard_hold_class;
+    if (hold_class != DONGLE_RUN_CLASS && hold_class != DONGLE_WALK_CLASS) {
+        return false;
+    }
+
+    const int64_t elapsed_us = now_us - s_dongle_last_state_us;
+    if (s_dongle_last_state_class != s_dongle_keyboard_hold_class ||
+        elapsed_us < 0 ||
+        elapsed_us > ((int64_t)DONGLE_BLADE_MOVE_HOLD_GRACE_MS * 1000LL)) {
+        dongle_release_keyboard_hold();
+        return true;
+    }
+
+    return false;
+}
+
 static bool dongle_is_event_class(uint8_t class_idx)
 {
     return class_idx < DONGLE_NUM_CLASSES && !dongle_is_state_class(class_idx);
@@ -1346,6 +1369,13 @@ static void dongle_send_key_action(uint8_t infer_class, float infer_confidence, 
         dongle_release_keyboard_hold();
         dongle_release_mouse_hold();
     } else if (dongle_is_mouse_view_action(action)) {
+        if (dongle_blade_pressed_fresh(now_us)) {
+            const bool released_move = dongle_release_stale_keyboard_hold_during_blade_turn(now_us);
+            s_dongle_hid_status = released_move ?
+                                  "blade_turn_move_hold_expired" :
+                                  "blade_turn_override";
+            return;
+        }
         dongle_release_mouse_hold();
         dongle_release_timed_mouse_hold(true, now_us);
     } else {
