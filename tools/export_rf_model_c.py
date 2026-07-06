@@ -110,7 +110,12 @@ def c_string_array(name: str, values: list[str]) -> str:
     return "\n".join(lines)
 
 
-def export_model(bundle_path: Path, output_dir: Path) -> None:
+def write_text_lf(path: Path, text: str) -> None:
+    with path.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+
+
+def export_model(bundle_path: Path, output_dir: Path, file_prefix: str, symbol_prefix: str) -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         bundle = joblib.load(bundle_path)
@@ -154,50 +159,53 @@ def export_model(bundle_path: Path, output_dir: Path) -> None:
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    header_path = output_dir / "rf_model_generated.h"
-    source_path = output_dir / "rf_model_generated.c"
+    macro_prefix = symbol_prefix.upper()
+    header_name = f"{file_prefix}.h"
+    source_name = f"{file_prefix}.c"
+    header_path = output_dir / header_name
+    source_path = output_dir / source_name
 
-    header_path.write_text(
+    write_text_lf(
+        header_path,
         "\n".join(
             [
                 "#pragma once",
                 "",
                 "#include <stdint.h>",
                 "",
-                f"#define RF_MODEL_TREE_COUNT {len(model.estimators_)}",
-                f"#define RF_MODEL_NODE_COUNT {len(children_left)}",
-                f"#define RF_MODEL_FEATURE_COUNT {len(feature_names)}",
-                f"#define RF_MODEL_CLASS_COUNT {len(class_names)}",
+                f"#define {macro_prefix}_TREE_COUNT {len(model.estimators_)}",
+                f"#define {macro_prefix}_NODE_COUNT {len(children_left)}",
+                f"#define {macro_prefix}_FEATURE_COUNT {len(feature_names)}",
+                f"#define {macro_prefix}_CLASS_COUNT {len(class_names)}",
                 "",
-                "extern const uint16_t rf_model_tree_offsets[RF_MODEL_TREE_COUNT + 1];",
-                "extern const int16_t rf_model_children_left[RF_MODEL_NODE_COUNT];",
-                "extern const int16_t rf_model_children_right[RF_MODEL_NODE_COUNT];",
-                "extern const int16_t rf_model_features[RF_MODEL_NODE_COUNT];",
-                "extern const float rf_model_thresholds[RF_MODEL_NODE_COUNT];",
-                "extern const uint8_t rf_model_leaf_classes[RF_MODEL_NODE_COUNT];",
-                "extern const char *const rf_model_class_names[RF_MODEL_CLASS_COUNT];",
+                f"extern const uint16_t {symbol_prefix}_tree_offsets[{macro_prefix}_TREE_COUNT + 1];",
+                f"extern const int16_t {symbol_prefix}_children_left[{macro_prefix}_NODE_COUNT];",
+                f"extern const int16_t {symbol_prefix}_children_right[{macro_prefix}_NODE_COUNT];",
+                f"extern const int16_t {symbol_prefix}_features[{macro_prefix}_NODE_COUNT];",
+                f"extern const float {symbol_prefix}_thresholds[{macro_prefix}_NODE_COUNT];",
+                f"extern const uint8_t {symbol_prefix}_leaf_classes[{macro_prefix}_NODE_COUNT];",
+                f"extern const char *const {symbol_prefix}_class_names[{macro_prefix}_CLASS_COUNT];",
                 "",
             ]
-        ),
-        encoding="utf-8",
+        )
     )
 
-    source_path.write_text(
+    write_text_lf(
+        source_path,
         "\n\n".join(
             [
-                '#include "rf_model_generated.h"',
+                f'#include "{header_name}"',
                 "",
-                c_array_u16("rf_model_tree_offsets", tree_offsets),
-                c_array_i16("rf_model_children_left", children_left),
-                c_array_i16("rf_model_children_right", children_right),
-                c_array_i16("rf_model_features", features),
-                c_array_float("rf_model_thresholds", thresholds),
-                c_array_u8("rf_model_leaf_classes", leaf_classes),
-                c_string_array("rf_model_class_names", class_names),
+                c_array_u16(f"{symbol_prefix}_tree_offsets", tree_offsets),
+                c_array_i16(f"{symbol_prefix}_children_left", children_left),
+                c_array_i16(f"{symbol_prefix}_children_right", children_right),
+                c_array_i16(f"{symbol_prefix}_features", features),
+                c_array_float(f"{symbol_prefix}_thresholds", thresholds),
+                c_array_u8(f"{symbol_prefix}_leaf_classes", leaf_classes),
+                c_string_array(f"{symbol_prefix}_class_names", class_names),
                 "",
             ]
-        ),
-        encoding="utf-8",
+        )
     )
 
     summary = {
@@ -208,9 +216,9 @@ def export_model(bundle_path: Path, output_dir: Path) -> None:
         "class_names": class_names,
         "node_ids": node_ids,
     }
-    (output_dir / "rf_model_generated_summary.json").write_text(
+    write_text_lf(
+        output_dir / f"{file_prefix}_summary.json",
         json.dumps(summary, ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
@@ -219,9 +227,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Export RF model bundle to firmware C arrays")
     parser.add_argument("--model", default="model/rf_model.joblib")
     parser.add_argument("--output-dir", default="main/generated")
+    parser.add_argument("--file-prefix", default="rf_model_generated")
+    parser.add_argument("--symbol-prefix", default="rf_model")
     args = parser.parse_args()
 
-    export_model(Path(args.model), Path(args.output_dir))
+    export_model(Path(args.model), Path(args.output_dir), args.file_prefix, args.symbol_prefix)
     return 0
 
 

@@ -282,11 +282,11 @@ def build_training_windows(
             )
 
     positive_count = len(feature_rows)
-    if positive_count == 0:
-        raise RuntimeError("no positive windows generated; inspect event timing and window parameters")
 
     event_lookup = build_event_lookup(all_events)
     include_state_labels = parse_filter_values(args.include_state_label)
+    if positive_count == 0 and not include_state_labels:
+        raise RuntimeError("no positive windows generated; inspect event timing and window parameters")
     if include_state_labels:
         state_candidates: list[tuple[str, int, pd.DataFrame, str]] = []
         for segment_id, segment_df in synced.groupby("segment_id", sort=False):
@@ -375,6 +375,9 @@ def build_training_windows(
                 "window_end_ms": float(window["sync_time_ms"].iloc[-1]),
             }
         )
+
+    if not feature_rows:
+        raise RuntimeError("no training windows generated; inspect filters and window parameters")
 
     X = pd.DataFrame(feature_rows).reindex(columns=expected_features)
     if X.isna().any().any():

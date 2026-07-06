@@ -21,6 +21,7 @@
 #include "imu_lsm6dsv.h"
 #include "m2p_espnow.h"
 #include "rf_infer.h"
+#include "rf_state_infer.h"
 #include "usb_keyboard.h"
 #include "battery_monitor.h"
 #include "status_led.h"
@@ -1494,6 +1495,34 @@ static bool dongle_is_event_class(uint8_t class_idx)
     return class_idx < DONGLE_NUM_CLASSES && !dongle_is_state_class(class_idx);
 }
 
+static bool dongle_class_from_state_label(const char *label, uint8_t *out_class)
+{
+    if (label == NULL || out_class == NULL) {
+        return false;
+    }
+    if (strcmp(label, "idle") == 0) {
+        *out_class = DONGLE_IDLE_CLASS;
+        return true;
+    }
+    if (strcmp(label, "move_noise") == 0) {
+        *out_class = DONGLE_MOVE_NOISE_CLASS;
+        return true;
+    }
+    if (strcmp(label, "right_hand_slash") == 0) {
+        *out_class = DONGLE_RIGHT_HAND_SLASH_CLASS;
+        return true;
+    }
+    if (strcmp(label, "run") == 0) {
+        *out_class = DONGLE_RUN_CLASS;
+        return true;
+    }
+    if (strcmp(label, "walk") == 0) {
+        *out_class = DONGLE_WALK_CLASS;
+        return true;
+    }
+    return false;
+}
+
 static bool dongle_is_mouse_view_action(const dongle_key_action_t *action)
 {
     return action->type == ACTION_TYPE_MOUSE_MOVE_LEFT ||
@@ -1910,23 +1939,59 @@ static bool dongle_build_rf_frame(rf_infer_node_sample_t frame[RF_INFER_NODE_COU
 static void dongle_run_rf_inference(int64_t now_us)
 {
     rf_infer_node_sample_t frame[RF_INFER_NODE_COUNT] = {0};
+    rf_state_infer_node_sample_t state_frame[RF_STATE_INFER_NODE_COUNT] = {0};
     double max_age_ms = 0.0;
 
     if (!dongle_build_rf_frame(frame, now_us, &max_age_ms)) {
         return;
     }
+    for (uint8_t node = 0; node < RF_INFER_NODE_COUNT && node < RF_STATE_INFER_NODE_COUNT; node++) {
+        state_frame[node].ax = frame[node].ax;
+        state_frame[node].ay = frame[node].ay;
+        state_frame[node].az = frame[node].az;
+        state_frame[node].gx = frame[node].gx;
+        state_frame[node].gy = frame[node].gy;
+        state_frame[node].gz = frame[node].gz;
+    }
 
     rf_infer_result_t result = {0};
+    rf_state_infer_result_t state_result = {0};
     const int64_t infer_start_us = esp_timer_get_time();
-    if (!rf_infer_push_frame(frame, &result) || !result.valid) {
+    const bool state_valid = rf_state_infer_push_frame(state_frame, &state_result) && state_result.valid;
+    const bool event_valid = rf_infer_push_frame(frame, &result) && result.valid;
+    if (!state_valid && !event_valid) {
         return;
     }
     const int64_t infer_elapsed_us = esp_timer_get_time() - infer_start_us;
 
-    const uint8_t result_class = result.class_index;
-    const float result_confidence = result.confidence;
-    const char *result_label = result.label;
-    const uint32_t result_frames = result.frame_count;
+    uint8_t result_class = DONGLE_IDLE_CLASS;
+    float result_confidence = 0.0f;
+    const char *result_label = "warming_up";
+    uint32_t result_frames = state_valid ? state_result.frame_count : result.frame_count;
+
+    uint8_t state_class = DONGLE_IDLE_CLASS;
+    const bool state_mapped = state_valid && dongle_class_from_state_label(state_result.label, &state_class);
+    const bool event_result_is_action =
+        event_valid &&
+        result.class_index < DONGLE_NUM_CLASSES &&
+        !dongle_is_state_class(result.class_index);
+
+    if (event_result_is_action) {
+        result_class = result.class_index;
+        result_confidence = result.confidence;
+        result_label = result.label;
+        result_frames = result.frame_count;
+    } else if (state_mapped) {
+        result_class = state_class;
+        result_confidence = state_result.confidence;
+        result_label = state_result.label;
+        result_frames = state_result.frame_count;
+    } else if (event_valid) {
+        result_class = result.class_index;
+        result_confidence = result.confidence;
+        result_label = result.label;
+        result_frames = result.frame_count;
+    }
 
 #if DONGLE_ENABLE_HID_ACTION_LOG
     dongle_send_key_action(result_class, result_confidence, now_us);
@@ -1966,6 +2031,7 @@ static void dongle_run_rf_inference(int64_t now_us)
     printf("# infer: action=%s conf=%.2f frames=%" PRIu32
            " hid_trigger=%d hid_count=%" PRIu32 " hid_ready=%d hid_status=%s"
            " hid_action=%s hid_event=%s"
+           " event_action=%s event_conf=%.2f state_action=%s state_conf=%.2f"
            " max_age_ms=%.1f infer_us=%" PRId64
            " blade_valid=%d blade_pressed=%d blade_fresh=%d"
            " blade_seq=%" PRIu32 " blade_age_ms=%.1f\n",
@@ -1978,6 +2044,10 @@ static void dongle_run_rf_inference(int64_t now_us)
            s_dongle_hid_status,
            hid_action,
            hid_event,
+           event_valid ? result.label : "warming_up",
+           event_valid ? (double)result.confidence : 0.0,
+           state_valid ? state_result.label : "warming_up",
+           state_valid ? (double)state_result.confidence : 0.0,
            max_age_ms,
            infer_elapsed_us,
            blade_valid ? 1 : 0,
