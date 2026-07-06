@@ -170,6 +170,7 @@ static const char *TAG = "imu_main";
 #define DONGLE_RF_MIN_CONFIDENCE      0.60f
 #define DONGLE_BLADE_MAX_AGE_MS       300
 #define DONGLE_BLADE_TURN_PERIOD_MS   20
+#define DONGLE_BLADE_MOVE_RELEASE_GRACE_MS 220
 #define DONGLE_BLADE_TURN_CHEST_NODE_ID TRACKER_NODE_CHEST
 /* 0=gx, 1=gy, 2=gz. Current turn data shows chest gy has the strongest left/right yaw signal. */
 #define DONGLE_BLADE_TURN_GYRO_AXIS   1
@@ -1304,7 +1305,7 @@ static void dongle_log_mouse_button_event(uint8_t class_idx,
 {
     dongle_note_hid_trigger(class_idx, event);
 #if DONGLE_ENABLE_HID_EVENT_LOG
-#if DONGLE_ENABLE_USB_KEYBOARD
+#if DONGLE_ENABLE_USB_MOUSE
     printf("%s: action=%s event=%s buttons=0x%02x result=%s\n",
            DONGLE_HID_LOG_PREFIX,
            dongle_action_class_name(class_idx),
@@ -1329,7 +1330,7 @@ static void dongle_log_mouse_move_event(uint8_t class_idx, int16_t dx, esp_err_t
 {
     dongle_note_hid_trigger(class_idx, "mouse_move");
 #if DONGLE_ENABLE_HID_EVENT_LOG
-#if DONGLE_ENABLE_USB_KEYBOARD
+#if DONGLE_ENABLE_USB_MOUSE
     printf("%s: action=%s event=mouse_move dx=%d result=%s\n",
            DONGLE_HID_LOG_PREFIX,
            dongle_action_class_name(class_idx),
@@ -1351,7 +1352,7 @@ static void dongle_log_mouse_move_event(uint8_t class_idx, int16_t dx, esp_err_t
 static esp_err_t dongle_mouse_move_x(int16_t dx)
 {
     esp_err_t err = ESP_OK;
-#if DONGLE_ENABLE_USB_KEYBOARD
+#if DONGLE_ENABLE_USB_MOUSE
     int16_t remaining = dx;
     while (remaining != 0) {
         int8_t step = 0;
@@ -1393,6 +1394,7 @@ static int8_t s_dongle_last_state_class = DONGLE_IDLE_CLASS;
 static int64_t s_dongle_last_state_us = 0;
 static int8_t s_dongle_resume_state_class = -1;
 static int64_t s_dongle_resume_state_until_us = 0;
+static int64_t s_dongle_last_blade_pressed_us = 0;
 static bool s_dongle_edge_armed[DONGLE_NUM_CLASSES] = {0};
 static bool s_dongle_edge_armed_ready = false;
 static uint16_t s_dongle_sustain_count[DONGLE_NUM_CLASSES] = {0};
@@ -1428,7 +1430,7 @@ static void dongle_release_mouse_hold(void)
     if (s_dongle_mouse_hold_class >= 0) {
         const uint8_t class_idx = (uint8_t)s_dongle_mouse_hold_class;
         esp_err_t err = ESP_OK;
-#if DONGLE_ENABLE_USB_KEYBOARD
+#if DONGLE_ENABLE_USB_MOUSE
         err = usb_mouse_release_buttons();
 #endif
         dongle_log_mouse_button_event(class_idx, "mouse_release", 0, err);
@@ -1448,7 +1450,7 @@ static void dongle_release_timed_mouse_hold(bool force, int64_t now_us)
 
     const uint8_t class_idx = (uint8_t)s_dongle_mouse_timed_hold_class;
     esp_err_t err = ESP_OK;
-#if DONGLE_ENABLE_USB_KEYBOARD
+#if DONGLE_ENABLE_USB_MOUSE
     err = usb_mouse_release_buttons();
 #endif
     dongle_log_mouse_button_event(class_idx, "mouse_release", 0, err);
@@ -1488,6 +1490,11 @@ static bool dongle_is_active_state_class(uint8_t class_idx)
     return class_idx == DONGLE_RIGHT_HAND_SLASH_CLASS ||
            class_idx == DONGLE_RUN_CLASS ||
            class_idx == DONGLE_WALK_CLASS;
+}
+
+static bool dongle_is_movement_hold_class(uint8_t class_idx)
+{
+    return class_idx == DONGLE_RUN_CLASS || class_idx == DONGLE_WALK_CLASS;
 }
 
 static bool dongle_is_event_class(uint8_t class_idx)
@@ -1604,6 +1611,32 @@ static bool dongle_try_resume_state_after_event(uint8_t *class_idx, int64_t now_
     return true;
 }
 
+static bool dongle_try_keep_movement_after_blade(uint8_t *class_idx, int64_t now_us)
+{
+    if (class_idx == NULL || s_dongle_keyboard_hold_class < 0) {
+        return false;
+    }
+
+    const uint8_t hold_class = (uint8_t)s_dongle_keyboard_hold_class;
+    if (!dongle_is_movement_hold_class(hold_class)) {
+        return false;
+    }
+
+    if (*class_idx != DONGLE_IDLE_CLASS && *class_idx != DONGLE_MOVE_NOISE_CLASS) {
+        return false;
+    }
+
+    const int64_t elapsed_us = now_us - s_dongle_last_blade_pressed_us;
+    if (elapsed_us < 0 ||
+        elapsed_us > ((int64_t)DONGLE_BLADE_MOVE_RELEASE_GRACE_MS * 1000LL)) {
+        return false;
+    }
+
+    *class_idx = hold_class;
+    s_dongle_hid_status = "blade_move_hold_grace";
+    return true;
+}
+
 static uint8_t dongle_smooth_class(uint8_t raw_class)
 {
     if ((int8_t)raw_class == s_dongle_pending_class) {
@@ -1658,7 +1691,7 @@ static void dongle_fire_action(uint8_t class_idx, const dongle_key_action_t *act
         }
     } else if (action->type == ACTION_TYPE_MOUSE_CLICK) {
         esp_err_t err = ESP_OK;
-#if DONGLE_ENABLE_USB_KEYBOARD
+#if DONGLE_ENABLE_USB_MOUSE
         err = usb_mouse_click(USB_MOUSE_BUTTON_LEFT, DONGLE_KEY_TAP_HOLD_MS);
 #endif
         dongle_log_mouse_button_event(class_idx, "mouse_click", USB_MOUSE_BUTTON_LEFT, err);
@@ -1669,7 +1702,7 @@ static void dongle_fire_action(uint8_t class_idx, const dongle_key_action_t *act
                                  action->cooldown_ms :
                                  DONGLE_MOUSE_RIGHT_HOLD_MS;
         esp_err_t err = ESP_OK;
-#if DONGLE_ENABLE_USB_KEYBOARD
+#if DONGLE_ENABLE_USB_MOUSE
         err = usb_mouse_set_buttons(USB_MOUSE_BUTTON_RIGHT);
 #endif
         dongle_log_mouse_button_event(class_idx, "mouse_hold", USB_MOUSE_BUTTON_RIGHT, err);
@@ -1717,6 +1750,10 @@ static void dongle_send_key_action(uint8_t infer_class, float infer_confidence, 
     dongle_init_edge_armed();
     dongle_action_config_ensure_ready();
 
+    if (dongle_blade_pressed_fresh(now_us)) {
+        s_dongle_last_blade_pressed_us = now_us;
+    }
+
     uint8_t raw_class = infer_class;
     const bool raw_class_is_confident =
         raw_class < DONGLE_NUM_CLASSES && infer_confidence >= dongle_action_min_confidence(raw_class);
@@ -1741,6 +1778,8 @@ static void dongle_send_key_action(uint8_t infer_class, float infer_confidence, 
             dongle_remember_state_class(class_idx, now_us);
         }
     }
+    const bool kept_movement_after_blade =
+        dongle_try_keep_movement_after_blade(&class_idx, now_us);
 
     const dongle_key_action_t *action = &s_dongle_key_actions[class_idx];
 
@@ -1794,7 +1833,9 @@ static void dongle_send_key_action(uint8_t infer_class, float infer_confidence, 
                 s_dongle_keyboard_hold_class = (int8_t)class_idx;
             }
         } else {
-            s_dongle_hid_status = "hold_active";
+            s_dongle_hid_status = kept_movement_after_blade ?
+                                  "blade_move_hold_grace" :
+                                  "hold_active";
         }
         return;
     }
@@ -1806,7 +1847,7 @@ static void dongle_send_key_action(uint8_t infer_class, float infer_confidence, 
         if (s_dongle_mouse_hold_class != (int8_t)class_idx) {
             dongle_release_mouse_hold();
             esp_err_t err = ESP_OK;
-#if DONGLE_ENABLE_USB_KEYBOARD
+#if DONGLE_ENABLE_USB_MOUSE
             err = usb_mouse_set_buttons(USB_MOUSE_BUTTON_LEFT);
 #endif
             dongle_log_mouse_button_event(class_idx, "mouse_hold", USB_MOUSE_BUTTON_LEFT, err);
