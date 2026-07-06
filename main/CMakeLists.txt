@@ -12,6 +12,7 @@ idf_component_register(SRCS "app_main.c"
                           esp_driver_rmt
                           esp_adc
                           esp_event
+                          esp_http_server
                           esp_netif
                           esp_timer
                           esp_wifi

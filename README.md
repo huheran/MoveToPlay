@@ -29,6 +29,39 @@ esp-idf-template/
 
 如果板载 LED 不在 `GPIO38`，修改 [main/app_main.c](/mnt/d/MyProject/Embedded-Design/esp-idf-template/main/app_main.c) 顶部的 `BLINK_GPIO` 即可。
 
+## Dongle / Tracker 构建配置
+
+dongle 是 16MB flash，tracker / blade 是 8MB flash。默认配置统一按 8MB 构建，16MB dongle 可以兼容 8MB 分区，只是后半段 flash 暂时不用。
+
+默认构建/烧录命令：
+
+```powershell
+idf.py build
+idf.py -p COMx flash monitor
+```
+
+如果想用独立 build 目录构建 8MB 固件：
+
+```powershell
+idf.py -B build-tracker8mb -D "SDKCONFIG=build-tracker8mb/sdkconfig" -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults.8mb" build
+idf.py -B build-tracker8mb -p COMx flash monitor
+```
+
+如果后续 dongle 固件确实需要使用 16MB 大分区，再用显式 16MB 配置：
+
+```powershell
+idf.py -B build-dongle16mb -D "SDKCONFIG=build-dongle16mb/sdkconfig" -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults.16mb" build
+idf.py -B build-dongle16mb -p COMx flash monitor
+```
+
+切换板子前仍需要在 `main/app_main.c` 顶部修改 `M2P_BOARD_PROFILE` 和 `M2P_DONGLE_MODE`。
+
+## Dongle Wi-Fi 配置页
+
+dongle 进入 Wi-Fi display mode 后，连接 `MoveToPlay-Dongle`，打开 `http://192.168.4.1/`。
+
+页面上方会实时显示 tracker 在线状态和电量；页面下方的 Controls 表格可以修改每个识别动作对应的输出、按键、修饰键、触发方式、置信度阈值、冷却时间和持续帧数。保存后配置会写入 dongle NVS，重启或退出 Wi-Fi display mode 后继续生效。恢复默认值可以点 `Reset defaults`。
+
 ## 模板原则
 
 - 先保证最小跑通

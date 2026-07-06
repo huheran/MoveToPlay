@@ -1,5 +1,6 @@
 #include "m2p_espnow.h"
 
+#include <stddef.h>
 #include <string.h>
 
 #include "esp_check.h"
@@ -17,9 +18,12 @@ static const char *TAG = "m2p_espnow";
 
 #define M2P_ESPNOW_RX_QUEUE_LEN 16
 #define M2P_ESPNOW_TX_POWER_QDBM 40 /* 10 dBm, unit is 0.25 dBm. */
+#define M2P_ESPNOW_PACKET_V1_SIZE 40
 
 _Static_assert(sizeof(m2p_espnow_packet_t) <= ESP_NOW_MAX_DATA_LEN,
                "MoveToPlay packet must fit in one ESP-NOW v1 packet");
+_Static_assert(offsetof(m2p_espnow_packet_t, battery_mv) == M2P_ESPNOW_PACKET_V1_SIZE,
+               "MoveToPlay v1 packet size must stay compatible");
 
 static const uint8_t s_broadcast_addr[ESP_NOW_ETH_ALEN] = {
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -27,6 +31,8 @@ static const uint8_t s_broadcast_addr[ESP_NOW_ETH_ALEN] = {
 
 static QueueHandle_t s_rx_queue = NULL;
 static bool s_espnow_ready = false;
+static esp_netif_t *s_softap_netif = NULL;
+static bool s_softap_ready = false;
 
 static esp_err_t init_nvs(void)
 {
@@ -78,10 +84,13 @@ static const char *role_name(m2p_espnow_role_t role)
     }
 }
 
-static bool is_valid_packet(const m2p_espnow_packet_t *packet)
+static bool is_valid_packet(const m2p_espnow_packet_t *packet, int data_len)
 {
     if (packet->magic != M2P_ESPNOW_MAGIC ||
-        packet->version != M2P_ESPNOW_PACKET_VERSION) {
+        packet->version < M2P_ESPNOW_PACKET_MIN_VERSION ||
+        packet->version > M2P_ESPNOW_PACKET_VERSION ||
+        data_len < M2P_ESPNOW_PACKET_V1_SIZE ||
+        data_len > (int)sizeof(m2p_espnow_packet_t)) {
         return false;
     }
 
@@ -95,15 +104,16 @@ static void espnow_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *
         return;
     }
 
-    if (data_len != sizeof(m2p_espnow_packet_t)) {
+    if (data_len < M2P_ESPNOW_PACKET_V1_SIZE ||
+        data_len > (int)sizeof(m2p_espnow_packet_t)) {
         return;
     }
 
     m2p_espnow_rx_packet_t rx_packet = {0};
     memcpy(rx_packet.src_addr, recv_info->src_addr, sizeof(rx_packet.src_addr));
-    memcpy(&rx_packet.packet, data, sizeof(rx_packet.packet));
+    memcpy(&rx_packet.packet, data, (size_t)data_len);
 
-    if (!is_valid_packet(&rx_packet.packet)) {
+    if (!is_valid_packet(&rx_packet.packet, data_len)) {
         return;
     }
 
@@ -169,17 +179,26 @@ esp_err_t m2p_espnow_init(m2p_espnow_role_t role, uint8_t channel)
 
 esp_err_t m2p_espnow_send_tracker_sample(uint8_t node_id,
                                           uint32_t sequence,
-                                          const imu_sample_t *sample)
+                                          const imu_sample_t *sample,
+                                          bool battery_valid,
+                                          uint8_t battery_percent,
+                                          uint16_t battery_mv)
 {
     ESP_RETURN_ON_FALSE(s_espnow_ready, ESP_ERR_INVALID_STATE, TAG, "esp-now not ready");
     ESP_RETURN_ON_FALSE(sample != NULL, ESP_ERR_INVALID_ARG, TAG, "sample is NULL");
+
+    if (battery_percent > 100U) {
+        battery_valid = false;
+        battery_percent = M2P_ESPNOW_BATTERY_PERCENT_UNKNOWN;
+        battery_mv = 0;
+    }
 
     m2p_espnow_packet_t packet = {
         .magic = M2P_ESPNOW_MAGIC,
         .version = M2P_ESPNOW_PACKET_VERSION,
         .type = M2P_ESPNOW_PACKET_TRACKER_IMU,
         .node_id = node_id,
-        .flags = 0,
+        .flags = battery_valid ? M2P_ESPNOW_TRACKER_FLAG_BATTERY_VALID : 0,
         .sequence = sequence,
         .timestamp_us = (uint32_t)esp_timer_get_time(),
         .accel_g = {
@@ -192,6 +211,9 @@ esp_err_t m2p_espnow_send_tracker_sample(uint8_t node_id,
             sample->gyro_dps[1],
             sample->gyro_dps[2],
         },
+        .battery_mv = battery_valid ? battery_mv : 0,
+        .battery_percent = battery_valid ? battery_percent : M2P_ESPNOW_BATTERY_PERCENT_UNKNOWN,
+        .reserved = 0,
     };
 
     return esp_now_send(s_broadcast_addr, (const uint8_t *)&packet, sizeof(packet));
@@ -223,4 +245,58 @@ bool m2p_espnow_receive(m2p_espnow_rx_packet_t *out_packet, uint32_t timeout_ms)
     }
 
     return xQueueReceive(s_rx_queue, out_packet, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+}
+
+esp_err_t m2p_espnow_enable_softap(const char *ssid,
+                                    const char *password,
+                                    uint8_t channel,
+                                    uint8_t max_connection)
+{
+    ESP_RETURN_ON_FALSE(s_espnow_ready, ESP_ERR_INVALID_STATE, TAG, "esp-now not ready");
+    ESP_RETURN_ON_FALSE(ssid != NULL, ESP_ERR_INVALID_ARG, TAG, "softap ssid is NULL");
+    ESP_RETURN_ON_FALSE(channel >= 1 && channel <= 14, ESP_ERR_INVALID_ARG, TAG, "invalid softap channel");
+    ESP_RETURN_ON_FALSE(max_connection > 0, ESP_ERR_INVALID_ARG, TAG, "invalid softap max_connection");
+
+    const char *ap_password = (password != NULL) ? password : "";
+    const size_t ssid_len = strlen(ssid);
+    const size_t pass_len = strlen(ap_password);
+    ESP_RETURN_ON_FALSE(ssid_len > 0 && ssid_len < 32, ESP_ERR_INVALID_ARG, TAG, "invalid softap ssid length");
+    ESP_RETURN_ON_FALSE(pass_len < 64, ESP_ERR_INVALID_ARG, TAG, "invalid softap password length");
+    ESP_RETURN_ON_FALSE(pass_len == 0 || pass_len >= 8, ESP_ERR_INVALID_ARG, TAG, "softap password too short");
+
+    if (s_softap_ready) {
+        return ESP_OK;
+    }
+
+    if (s_softap_netif == NULL) {
+        s_softap_netif = esp_netif_create_default_wifi_ap();
+        ESP_RETURN_ON_FALSE(s_softap_netif != NULL, ESP_ERR_NO_MEM, TAG, "softap netif create failed");
+    }
+
+    wifi_config_t ap_config = {0};
+    memcpy(ap_config.ap.ssid, ssid, ssid_len);
+    ap_config.ap.ssid_len = ssid_len;
+    memcpy(ap_config.ap.password, ap_password, pass_len);
+    ap_config.ap.channel = channel;
+    ap_config.ap.max_connection = max_connection;
+    ap_config.ap.authmode = (pass_len == 0) ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
+    ap_config.ap.pmf_cfg.required = false;
+
+    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_APSTA), TAG, "wifi APSTA mode failed");
+    ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &ap_config), TAG, "softap config failed");
+
+    esp_err_t channel_err = esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+    if (channel_err != ESP_OK) {
+        ESP_LOGW(TAG, "softap channel set warning: %s", esp_err_to_name(channel_err));
+    }
+
+    ESP_LOGI(TAG,
+             "SoftAP enabled, ssid=%s channel=%u auth=%s max_connection=%u",
+             ssid,
+             channel,
+             (pass_len == 0) ? "open" : "wpa2",
+             max_connection);
+
+    s_softap_ready = true;
+    return ESP_OK;
 }

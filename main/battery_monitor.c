@@ -85,9 +85,9 @@ float battery_monitor_get_voltage(void)
     return vbat_mv / 1000.0f;
 }
 
-int battery_monitor_get_percent(void)
+int battery_monitor_percent_from_voltage(float voltage)
 {
-    float vbat_mv = battery_monitor_get_voltage() * 1000.0f;
+    float vbat_mv = voltage * 1000.0f;
 
     if (vbat_mv >= BATTERY_FULL_MV) {
         return 100;
@@ -97,4 +97,9 @@ int battery_monitor_get_percent(void)
     }
 
     return (int)((vbat_mv - BATTERY_EMPTY_MV) * 100.0f / (BATTERY_FULL_MV - BATTERY_EMPTY_MV));
+}
+
+int battery_monitor_get_percent(void)
+{
+    return battery_monitor_percent_from_voltage(battery_monitor_get_voltage());
 }
