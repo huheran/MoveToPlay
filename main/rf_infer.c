@@ -21,15 +21,20 @@ static uint32_t s_total_frames = 0;
 static float s_features[RF_MODEL_FEATURE_COUNT];
 
 static const char *const s_class_key_text[RF_MODEL_CLASS_COUNT] = {
-    "R",       /* both_hands_raise */
-    "F",       /* hands_chest_push */
-    "X",       /* hands_cross_chest */
+    "1/2/3/4", /* hands_cross_forehead */
+    "F",       /* hands_press_down */
+    "RMB",     /* hands_shoot */
     "-",       /* idle */
     "SPACE",   /* jump */
-    "Q",       /* left_hand_raise */
-    "E",       /* right_hand_raise */
-    "J",       /* right_hand_slash */
+    "E",       /* kick */
+    "-",       /* left_hand_raise */
+    "-",       /* move_noise */
+    "-",       /* right_hand_raise */
+    "LMB",     /* right_hand_slash */
     "SHIFT+W", /* run */
+    "MOUSE_L", /* turn_left */
+    "MOUSE_R", /* turn_right */
+    "Q",       /* ultraman_beam */
     "W",       /* walk */
 };
 
