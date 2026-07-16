@@ -237,6 +237,84 @@ def is_near_any_event(session_id: str, time_ms: float, event_lookup: dict[str, l
     return False
 
 
+def collect_pure_label_windows(
+    synced: pd.DataFrame,
+    label: str,
+    event_lookup: dict[str, list[dict[str, object]]],
+    args: argparse.Namespace,
+) -> tuple[dict[str, list[tuple[str, int]]], dict[str, pd.DataFrame]]:
+    pool: dict[str, list[tuple[str, int]]] = {}
+    segments: dict[str, pd.DataFrame] = {}
+    for segment_id, segment_df in synced.groupby("segment_id", sort=False):
+        segment_df = segment_df.reset_index(drop=True)
+        if len(segment_df) < args.window_size:
+            continue
+        session_id = str(segment_df["session_id"].iloc[0])
+        label_values = segment_df["state_label"].to_numpy()
+        for start in range(0, len(segment_df) - args.window_size + 1, args.state_stride_frames):
+            if not (label_values[start : start + args.window_size] == label).all():
+                continue
+            end_time = float(segment_df["sync_time_ms"].iloc[start + args.window_size - 1])
+            if is_near_any_event(session_id, end_time, event_lookup, args.state_exclude_ms):
+                continue
+            pool.setdefault(session_id, []).append((segment_id, start))
+            segments.setdefault(segment_id, segment_df)
+    return pool, segments
+
+
+def build_synthetic_onset_windows(
+    synced: pd.DataFrame,
+    onset_labels: set[str],
+    event_lookup: dict[str, list[dict[str, object]]],
+    args: argparse.Namespace,
+    feature_rows: list[dict[str, float]],
+    labels: list[str],
+    groups: list[str],
+    manifest_rows: list[dict[str, object]],
+) -> int:
+    """Splice idle-tail + movement-head windows from the same session to
+    synthesize idle->walk/run onsets that the recordings never captured
+    (every label change in the corpus coincides with a recording pause)."""
+    rng = np.random.default_rng(args.random_state + 1)
+    move_min = args.synth_onset_move_min_frames
+    move_max = args.synth_onset_move_max_frames
+    if move_max <= 0:
+        move_max = args.window_size - 2
+
+    idle_pool, idle_segments = collect_pure_label_windows(synced, "idle", event_lookup, args)
+    count = 0
+    for label in sorted(onset_labels):
+        move_pool, move_segments = collect_pure_label_windows(synced, label, event_lookup, args)
+        sessions = sorted(set(idle_pool) & set(move_pool))
+        if not sessions:
+            print(f"[warn] no session contains both idle and {label}; skipping synthetic onsets for {label}")
+            continue
+        for _ in range(args.synth_onset_per_label):
+            session_id = sessions[int(rng.integers(len(sessions)))]
+            idle_seg_id, idle_start = idle_pool[session_id][int(rng.integers(len(idle_pool[session_id])))]
+            move_seg_id, move_start = move_pool[session_id][int(rng.integers(len(move_pool[session_id])))]
+            move_frames = int(rng.integers(move_min, move_max + 1))
+            idle_frames = args.window_size - move_frames
+            idle_part = idle_segments[idle_seg_id].iloc[idle_start : idle_start + idle_frames]
+            move_part = move_segments[move_seg_id].iloc[move_start : move_start + move_frames]
+            window = pd.concat([idle_part, move_part], ignore_index=True)
+            feature_rows.append(extract_window_features(window, RF_NODE_IDS))
+            labels.append(label)
+            groups.append(f"synth_{label}_{move_seg_id}_{move_start // max(1, args.group_chunk_frames):04d}")
+            manifest_rows.append(
+                {
+                    "source": "state_onset_synth",
+                    "event_id": "",
+                    "label": label,
+                    "session_id": session_id,
+                    "window_start_ms": float(idle_part["sync_time_ms"].iloc[0]),
+                    "window_end_ms": float(move_part["sync_time_ms"].iloc[-1]),
+                }
+            )
+            count += 1
+    return count
+
+
 def build_training_windows(
     synced: pd.DataFrame,
     positive_events: pd.DataFrame,
@@ -288,7 +366,9 @@ def build_training_windows(
     if positive_count == 0 and not include_state_labels:
         raise RuntimeError("no positive windows generated; inspect event timing and window parameters")
     if include_state_labels:
-        state_candidates: list[tuple[str, int, pd.DataFrame, str]] = []
+        state_onset_labels = parse_filter_values(args.state_onset_label)
+        state_candidates: list[tuple[str, int, pd.DataFrame, str, bool]] = []
+        state_onset_candidate_count = 0
         for segment_id, segment_df in synced.groupby("segment_id", sort=False):
             segment_df = segment_df.reset_index(drop=True)
             if len(segment_df) < args.window_size:
@@ -303,37 +383,125 @@ def build_training_windows(
                 if state_counts.empty:
                     continue
                 state_label = str(state_counts.index[0])
-                if state_label not in include_state_labels:
+                is_onset_window = False
+                if state_label in include_state_labels and float(state_counts.iloc[0]) >= args.state_min_purity:
+                    pass
+                elif state_onset_labels and args.state_onset_tail_frames > 0:
+                    tail = window.tail(min(args.state_onset_tail_frames, len(window)))
+                    tail_counts = tail["state_label"].value_counts(normalize=True)
+                    if tail_counts.empty:
+                        continue
+                    tail_label = str(tail_counts.index[0])
+                    tail_ratio = float(tail_counts.iloc[0])
+                    current_label = str(tail["state_label"].iloc[-1])
+                    if (
+                        tail_label not in include_state_labels
+                        or tail_label not in state_onset_labels
+                        or current_label != tail_label
+                        or tail_ratio < args.state_onset_min_ratio
+                    ):
+                        continue
+                    state_label = tail_label
+                    is_onset_window = True
+                    state_onset_candidate_count += 1
+                else:
                     continue
-                if float(state_counts.iloc[0]) < args.state_min_purity:
-                    continue
-                state_candidates.append((segment_id, end_idx, window, state_label))
+                state_candidates.append((segment_id, end_idx, window, state_label, is_onset_window))
+
+        if state_onset_labels:
+            print(
+                "[info] state onset candidates="
+                f"{state_onset_candidate_count} labels={sorted(state_onset_labels)}"
+            )
 
         if args.max_state_windows_per_label > 0:
             rng = np.random.default_rng(args.random_state)
-            selected_state_candidates: list[tuple[str, int, pd.DataFrame, str]] = []
+            selected_state_candidates: list[tuple[str, int, pd.DataFrame, str, bool]] = []
             for state_label in sorted(include_state_labels):
                 rows = [candidate for candidate in state_candidates if candidate[3] == state_label]
                 if len(rows) > args.max_state_windows_per_label:
-                    indices = rng.choice(len(rows), size=args.max_state_windows_per_label, replace=False)
-                    rows = [rows[int(index)] for index in indices]
+                    onset_rows = [candidate for candidate in rows if candidate[4]]
+                    regular_rows = [candidate for candidate in rows if not candidate[4]]
+                    if len(onset_rows) >= args.max_state_windows_per_label:
+                        indices = rng.choice(
+                            len(onset_rows),
+                            size=args.max_state_windows_per_label,
+                            replace=False,
+                        )
+                        rows = [onset_rows[int(index)] for index in indices]
+                    else:
+                        remaining = args.max_state_windows_per_label - len(onset_rows)
+                        indices = rng.choice(len(regular_rows), size=remaining, replace=False)
+                        rows = onset_rows + [regular_rows[int(index)] for index in indices]
                 selected_state_candidates.extend(rows)
         else:
             selected_state_candidates = state_candidates
 
-        for segment_id, end_idx, window, state_label in selected_state_candidates:
+        for segment_id, end_idx, window, state_label, is_onset_window in selected_state_candidates:
             feature_rows.append(extract_window_features(window, RF_NODE_IDS))
             labels.append(state_label)
             groups.append(f"state_{segment_id}_{end_idx // max(1, args.group_chunk_frames):04d}")
             manifest_rows.append(
                 {
-                    "source": "state",
+                    "source": "state_onset" if is_onset_window else "state",
                     "event_id": "",
                     "label": state_label,
                     "session_id": str(window["session_id"].iloc[0]),
                     "window_start_ms": float(window["sync_time_ms"].iloc[0]),
                     "window_end_ms": float(window["sync_time_ms"].iloc[-1]),
                 }
+            )
+
+        if state_onset_labels and args.synth_onset_per_label > 0:
+            synth_count = build_synthetic_onset_windows(
+                synced,
+                state_onset_labels,
+                event_lookup,
+                args,
+                feature_rows,
+                labels,
+                groups,
+                manifest_rows,
+            )
+            print(f"[info] synthetic onset windows={synth_count}")
+
+        hard_negative_types = parse_filter_values(args.hard_negative_event_type)
+        if hard_negative_types:
+            hard_negative_count = 0
+            hard_events = all_events[all_events["event_type"].isin(hard_negative_types)]
+            for _, event in hard_events.iterrows():
+                session_id = str(event["session_id"])
+                event_time = float(event["pc_timestamp_ms"])
+                session_df = synced[synced["session_id"] == session_id].reset_index(drop=True)
+                candidate_end = session_df[
+                    (session_df["sync_time_ms"] >= event_time + args.hard_negative_start_ms)
+                    & (session_df["sync_time_ms"] <= event_time + args.hard_negative_end_ms)
+                ].index.to_list()
+                candidate_end = candidate_end[:: max(1, args.positive_stride_frames)]
+                for end_idx in candidate_end:
+                    start_idx = end_idx - args.window_size + 1
+                    if start_idx < 0:
+                        continue
+                    window = session_df.iloc[start_idx : end_idx + 1]
+                    if len(window) != args.window_size or not window_is_contiguous(window, args.align_ms):
+                        continue
+                    feature_rows.append(extract_window_features(window, RF_NODE_IDS))
+                    labels.append(args.hard_negative_label)
+                    groups.append(str(event["event_id"]))
+                    manifest_rows.append(
+                        {
+                            "source": "hard_negative",
+                            "event_id": str(event["event_id"]),
+                            "label": args.hard_negative_label,
+                            "session_id": session_id,
+                            "window_start_ms": float(window["sync_time_ms"].iloc[0]),
+                            "window_end_ms": float(window["sync_time_ms"].iloc[-1]),
+                        }
+                    )
+                    hard_negative_count += 1
+            print(
+                f"[info] hard negative windows={hard_negative_count} "
+                f"types={sorted(hard_negative_types)} label={args.hard_negative_label}"
             )
 
     negative_target = int(round(positive_count * args.negative_ratio))
@@ -446,6 +614,16 @@ def train_and_save(
             "positive_end_ms": args.positive_end_ms,
             "include_state_label": args.include_state_label,
             "state_exclude_ms": args.state_exclude_ms,
+            "state_onset_label": args.state_onset_label,
+            "state_onset_tail_frames": args.state_onset_tail_frames,
+            "state_onset_min_ratio": args.state_onset_min_ratio,
+            "synth_onset_per_label": args.synth_onset_per_label,
+            "synth_onset_move_min_frames": args.synth_onset_move_min_frames,
+            "synth_onset_move_max_frames": args.synth_onset_move_max_frames,
+            "hard_negative_event_type": args.hard_negative_event_type,
+            "hard_negative_label": args.hard_negative_label,
+            "hard_negative_start_ms": args.hard_negative_start_ms,
+            "hard_negative_end_ms": args.hard_negative_end_ms,
             "negative_exclude_ms": args.negative_exclude_ms,
         },
     }
@@ -499,6 +677,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--state-stride-frames", type=int, default=5)
     parser.add_argument("--state-exclude-ms", type=int, default=3000)
     parser.add_argument("--state-min-purity", type=float, default=0.95)
+    parser.add_argument("--state-onset-label", action="append", default=[])
+    parser.add_argument("--state-onset-tail-frames", type=int, default=0)
+    parser.add_argument("--state-onset-min-ratio", type=float, default=0.4)
+    parser.add_argument("--synth-onset-per-label", type=int, default=0)
+    parser.add_argument("--synth-onset-move-min-frames", type=int, default=5)
+    parser.add_argument("--synth-onset-move-max-frames", type=int, default=0)
+    parser.add_argument("--hard-negative-event-type", action="append", default=[])
+    parser.add_argument("--hard-negative-label", default="move_noise")
+    parser.add_argument("--hard-negative-start-ms", type=int, default=0)
+    parser.add_argument("--hard-negative-end-ms", type=int, default=500)
     parser.add_argument("--max-state-windows-per-label", type=int, default=0)
     parser.add_argument("--negative-exclude-ms", type=int, default=3000)
     parser.add_argument("--negative-ratio", type=float, default=1.0)
@@ -516,6 +704,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_arg_parser().parse_args()
+    if args.state_onset_tail_frames < 0 or args.state_onset_tail_frames > args.window_size:
+        raise ValueError("state-onset-tail-frames must be between 0 and window-size")
+    if not 0.0 < args.state_onset_min_ratio <= 1.0:
+        raise ValueError("state-onset-min-ratio must be in (0, 1]")
+    if args.synth_onset_per_label > 0:
+        move_max = args.synth_onset_move_max_frames if args.synth_onset_move_max_frames > 0 else args.window_size - 2
+        if not 1 <= args.synth_onset_move_min_frames <= move_max <= args.window_size - 1:
+            raise ValueError("synth onset frames must satisfy 1 <= move-min <= move-max <= window-size - 1")
     samples = load_samples(Path(args.samples))
     all_events = load_events(Path(args.events))
     positive_events = filter_positive_events(all_events, args)
