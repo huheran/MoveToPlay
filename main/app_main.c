@@ -177,7 +177,7 @@ static const char *TAG = "imu_main";
 /* Mouse X is positive for turning right. With the current chest mounting, gy positive means left. */
 #define DONGLE_BLADE_TURN_GYRO_SIGN   -1.0f
 #define DONGLE_BLADE_TURN_DEADZONE_DPS 8.0f
-#define DONGLE_BLADE_TURN_SENSITIVITY 6.0f /* mouse px per integrated gyro degree */
+#define DONGLE_BLADE_TURN_SENSITIVITY 10.0f /* mouse px per integrated gyro degree */
 #define DONGLE_BLADE_TURN_MAX_STEP_DELTA 80
 #define DONGLE_BLADE_TURN_CHEST_MAX_AGE_MS 150
 
@@ -786,6 +786,8 @@ static void dongle_print_latest_states(void)
 #define DONGLE_STATE_RESUME_GRACE_MS  200
 #define DONGLE_STATE_EVENT_BRIDGE_MS  320
 #define DONGLE_CONFIRM_FRAMES         3
+#define DONGLE_MOVEMENT_CONFIRM_FRAMES 4
+#define DONGLE_MOVEMENT_ENTRY_CONFIDENCE 0.52f
 #define DONGLE_INFER_RATE_HZ          25
 
 #define DONGLE_ARRAY_SIZE(a)          (sizeof(a) / sizeof((a)[0]))
@@ -1497,6 +1499,17 @@ static bool dongle_is_movement_hold_class(uint8_t class_idx)
     return class_idx == DONGLE_RUN_CLASS || class_idx == DONGLE_WALK_CLASS;
 }
 
+static float dongle_effective_min_confidence(uint8_t class_idx)
+{
+    const float configured_confidence = dongle_action_min_confidence(class_idx);
+    if (dongle_is_movement_hold_class(class_idx) &&
+        configured_confidence > DONGLE_MOVEMENT_ENTRY_CONFIDENCE) {
+        return DONGLE_MOVEMENT_ENTRY_CONFIDENCE;
+    }
+
+    return configured_confidence;
+}
+
 static bool dongle_is_event_class(uint8_t class_idx)
 {
     return class_idx < DONGLE_NUM_CLASSES && !dongle_is_state_class(class_idx);
@@ -1648,7 +1661,12 @@ static uint8_t dongle_smooth_class(uint8_t raw_class)
         s_dongle_pending_count = 1;
     }
 
-    if (s_dongle_pending_count >= DONGLE_CONFIRM_FRAMES) {
+    const uint8_t required_frames =
+        dongle_is_movement_hold_class(raw_class) &&
+        s_dongle_confirmed_class != (int8_t)raw_class ?
+        DONGLE_MOVEMENT_CONFIRM_FRAMES :
+        DONGLE_CONFIRM_FRAMES;
+    if (s_dongle_pending_count >= required_frames) {
         s_dongle_confirmed_class = s_dongle_pending_class;
     }
 
@@ -1756,7 +1774,8 @@ static void dongle_send_key_action(uint8_t infer_class, float infer_confidence, 
 
     uint8_t raw_class = infer_class;
     const bool raw_class_is_confident =
-        raw_class < DONGLE_NUM_CLASSES && infer_confidence >= dongle_action_min_confidence(raw_class);
+        raw_class < DONGLE_NUM_CLASSES &&
+        infer_confidence >= dongle_effective_min_confidence(raw_class);
     if (!raw_class_is_confident) {
         raw_class = DONGLE_IDLE_CLASS;
         s_dongle_hid_status = "below_threshold";
@@ -2054,7 +2073,7 @@ static void dongle_run_rf_inference(int64_t now_us)
 
     const char *display_label = result_label;
     const float display_min_confidence = (result_class < DONGLE_NUM_CLASSES) ?
-                                         dongle_action_min_confidence(result_class) :
+                                         dongle_effective_min_confidence(result_class) :
                                          DONGLE_RF_MIN_CONFIDENCE;
     if (result_confidence < display_min_confidence) {
         display_label = "uncertain";
