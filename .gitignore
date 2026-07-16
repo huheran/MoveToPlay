@@ -33,3 +33,6 @@ main/generated/
 # 编辑器本地配置
 .vscode/
 .idea/
+
+# 数据审计中间产物
+analysis/imu_data_audit_*/
