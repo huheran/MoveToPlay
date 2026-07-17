@@ -28,6 +28,7 @@ typedef enum {
 
 #define M2P_ESPNOW_BLADE_FLAG_PRESSED 0x01U
 #define M2P_ESPNOW_TRACKER_FLAG_BATTERY_VALID 0x01U
+#define M2P_ESPNOW_BLADE_FLAG_BATTERY_VALID 0x02U
 #define M2P_ESPNOW_BATTERY_PERCENT_UNKNOWN 0xFFU
 
 typedef struct {
@@ -61,7 +62,10 @@ esp_err_t m2p_espnow_send_tracker_sample(uint8_t node_id,
                                           uint16_t battery_mv);
 esp_err_t m2p_espnow_send_blade_state(uint8_t node_id,
                                        uint32_t sequence,
-                                       bool pressed);
+                                       bool pressed,
+                                       bool battery_valid,
+                                       uint8_t battery_percent,
+                                       uint16_t battery_mv);
 bool m2p_espnow_receive(m2p_espnow_rx_packet_t *out_packet, uint32_t timeout_ms);
 esp_err_t m2p_espnow_enable_softap(const char *ssid,
                                     const char *password,

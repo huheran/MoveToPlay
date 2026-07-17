@@ -56,7 +56,7 @@ static const char *TAG = "imu_main";
  * *_BOARD_STYLE:     0=current, 1=new
  */
 #define M2P_BOARD_PROFILE             1
-#define M2P_DONGLE_MODE               0
+#define M2P_DONGLE_MODE               2
 
 #define M2P_CHEST_BOARD_STYLE         1
 #define M2P_RIGHT_HAND_BOARD_STYLE    1
@@ -155,8 +155,8 @@ static const char *TAG = "imu_main";
 #define DONGLE_SERIAL_STATE_RATE_HZ   25
 #define DONGLE_SERIAL_STATE_PERIOD_MS (1000 / DONGLE_SERIAL_STATE_RATE_HZ)
 #define DONGLE_MAX_TRACKER_NODES      8
-#define DONGLE_WIFI_DISPLAY_GPIO      GPIO_NUM_8
-#define DONGLE_WIFI_DISPLAY_ACTIVE_LEVEL 1
+#define DONGLE_WIFI_DISPLAY_GPIO      GPIO_NUM_4
+#define DONGLE_WIFI_DISPLAY_ACTIVE_LEVEL 0
 #define DONGLE_WIFI_DISPLAY_HOLD_MS   4000
 #define DONGLE_WIFI_DISPLAY_POLL_MS   50
 #define DONGLE_WIFI_DISPLAY_AP_SSID   "MoveToPlay-Dongle"
@@ -183,14 +183,20 @@ static const char *TAG = "imu_main";
 
 #define BLADE_NODE_ID                 100
 #define BLADE_BUTTON_GPIO             GPIO_NUM_4
-#define BLADE_REPORT_RATE_HZ          50
-#define BLADE_REPORT_PERIOD_MS        (1000 / BLADE_REPORT_RATE_HZ)
+#define BLADE_POLL_RATE_HZ            50
+#define BLADE_POLL_PERIOD_MS          (1000 / BLADE_POLL_RATE_HZ)
+#define BLADE_IDLE_HEARTBEAT_RATE_HZ  5
+#define BLADE_IDLE_HEARTBEAT_PERIOD_MS (1000 / BLADE_IDLE_HEARTBEAT_RATE_HZ)
+#define BLADE_PRESSED_REPORT_RATE_HZ  25
+#define BLADE_PRESSED_REPORT_PERIOD_MS (1000 / BLADE_PRESSED_REPORT_RATE_HZ)
+#define BLADE_STATE_CHANGE_BURST_COUNT 3
 #define BLADE_DEBOUNCE_SAMPLES        3
-#define BLADE_ENABLE_SERIAL_OUTPUT    1
+#define BLADE_ENABLE_SERIAL_OUTPUT    0
 #define BLADE_SERIAL_STATE_RATE_HZ    10
 #define BLADE_SERIAL_STATE_PERIOD_MS  (1000 / BLADE_SERIAL_STATE_RATE_HZ)
-#define BLADE_SLEEP_FIRST_CLICK_MAX_MS 600
-#define BLADE_SLEEP_DOUBLE_CLICK_GAP_MS 700
+#define BLADE_SLEEP_SHORT_PRESS_MAX_MS 600
+#define BLADE_SLEEP_SHORT_PRESS_COUNT  4
+#define BLADE_SLEEP_SEQUENCE_GAP_MS    700
 #define BLADE_SLEEP_HOLD_MS           5000
 #define BLADE_WAKE_CONFIRM_HOLD_MS    3000
 
@@ -232,15 +238,31 @@ static const char *TAG = "imu_main";
 #error "BLADE_SERIAL_STATE_RATE_HZ must be greater than 0"
 #endif
 
+#if BLADE_POLL_RATE_HZ <= 0
+#error "BLADE_POLL_RATE_HZ must be greater than 0"
+#endif
+
+#if BLADE_IDLE_HEARTBEAT_RATE_HZ <= 0
+#error "BLADE_IDLE_HEARTBEAT_RATE_HZ must be greater than 0"
+#endif
+
+#if BLADE_PRESSED_REPORT_RATE_HZ <= 0
+#error "BLADE_PRESSED_REPORT_RATE_HZ must be greater than 0"
+#endif
+
+#if BLADE_STATE_CHANGE_BURST_COUNT <= 0
+#error "BLADE_STATE_CHANGE_BURST_COUNT must be greater than 0"
+#endif
+
 #if (MOVE_TO_PLAY_TRACKER_NODE_ID < 1) || (MOVE_TO_PLAY_TRACKER_NODE_ID > DONGLE_MAX_TRACKER_NODES)
 #error "MOVE_TO_PLAY_TRACKER_NODE_ID must be in range 1..DONGLE_MAX_TRACKER_NODES"
 #endif
 
 /* 预留后续按键/串口命令控制，第一版默认开启采样 */
 static bool sampling_enabled = true;
-static volatile bool s_tracker_battery_valid = false;
-static volatile uint8_t s_tracker_battery_percent = M2P_ESPNOW_BATTERY_PERCENT_UNKNOWN;
-static volatile uint16_t s_tracker_battery_mv = 0;
+static volatile bool s_local_battery_valid = false;
+static volatile uint8_t s_local_battery_percent = M2P_ESPNOW_BATTERY_PERCENT_UNKNOWN;
+static volatile uint16_t s_local_battery_mv = 0;
 
 static uint16_t battery_voltage_to_mv(float voltage)
 {
@@ -369,9 +391,9 @@ static void imu_sampling_task(void *arg)
             esp_err_t send_err = m2p_espnow_send_tracker_sample(BOARD_NODE_ID,
                                                                 sample_index,
                                                                 &sample,
-                                                                s_tracker_battery_valid,
-                                                                s_tracker_battery_percent,
-                                                                s_tracker_battery_mv);
+                                                                s_local_battery_valid,
+                                                                s_local_battery_percent,
+                                                                s_local_battery_mv);
             if (send_err != ESP_OK && (sample_index % IMU_SAMPLE_RATE_HZ) == 0) {
                 ESP_LOGW(TAG, "ESP-NOW send failed: %s", esp_err_to_name(send_err));
             }
@@ -414,16 +436,23 @@ typedef struct {
     bool valid;
     bool pressed;
     bool dirty;
+    bool battery_valid;
     uint8_t src_addr[6];
     uint8_t node_id;
     uint32_t sequence;
     uint32_t timestamp_us;
     int64_t last_rx_us;
+    int64_t last_battery_rx_us;
+    uint16_t battery_mv;
+    uint8_t battery_percent;
 } dongle_blade_state_t;
 
 static dongle_latest_node_t s_dongle_latest_nodes[DONGLE_MAX_TRACKER_NODES];
 static dongle_blade_state_t s_dongle_blade_state;
 static SemaphoreHandle_t s_dongle_state_mutex;
+#if DONGLE_ENABLE_USB_KEYBOARD || DONGLE_ENABLE_USB_MOUSE
+static SemaphoreHandle_t s_dongle_hid_mutex;
+#endif
 static int64_t s_dongle_display_last_tracker_store_us[DONGLE_MAX_TRACKER_NODES];
 #if DONGLE_ENABLE_USB_MOUSE
 static int64_t s_dongle_last_blade_turn_us = 0;
@@ -538,6 +567,13 @@ static void dongle_store_blade_packet(const m2p_espnow_rx_packet_t *rx_packet)
     s_dongle_blade_state.sequence = rx_packet->packet.sequence;
     s_dongle_blade_state.timestamp_us = rx_packet->packet.timestamp_us;
     s_dongle_blade_state.last_rx_us = esp_timer_get_time();
+    if ((rx_packet->packet.flags & M2P_ESPNOW_BLADE_FLAG_BATTERY_VALID) != 0 &&
+        rx_packet->packet.battery_percent <= 100U) {
+        s_dongle_blade_state.battery_valid = true;
+        s_dongle_blade_state.battery_percent = rx_packet->packet.battery_percent;
+        s_dongle_blade_state.battery_mv = rx_packet->packet.battery_mv;
+        s_dongle_blade_state.last_battery_rx_us = s_dongle_blade_state.last_rx_us;
+    }
     memcpy(s_dongle_blade_state.src_addr,
            rx_packet->src_addr,
            sizeof(s_dongle_blade_state.src_addr));
@@ -2140,13 +2176,17 @@ typedef struct {
     bool seen;
     bool online;
     bool pressed;
+    bool battery_valid;
     uint8_t node_id;
     uint32_t sequence;
     uint32_t age_ms;
+    uint32_t battery_age_ms;
+    uint16_t battery_mv;
+    uint8_t battery_percent;
 } dongle_status_blade_snapshot_t;
 
 static httpd_handle_t s_dongle_status_httpd;
-static bool s_dongle_wifi_display_active;
+static volatile bool s_dongle_wifi_display_active;
 
 static uint32_t dongle_age_ms(int64_t now_us, int64_t last_us)
 {
@@ -2189,12 +2229,18 @@ static void dongle_status_snapshot(dongle_status_node_snapshot_t snapshot[DONGLE
 
     if (blade != NULL) {
         const uint32_t age_ms = dongle_age_ms(now_us, s_dongle_blade_state.last_rx_us);
+        const uint32_t battery_age_ms =
+            dongle_age_ms(now_us, s_dongle_blade_state.last_battery_rx_us);
         blade->seen = s_dongle_blade_state.valid;
         blade->online = s_dongle_blade_state.valid && age_ms <= DONGLE_STATUS_ONLINE_MAX_AGE_MS;
         blade->pressed = s_dongle_blade_state.valid && s_dongle_blade_state.pressed;
+        blade->battery_valid = s_dongle_blade_state.battery_valid;
         blade->node_id = s_dongle_blade_state.valid ? s_dongle_blade_state.node_id : BLADE_NODE_ID;
         blade->sequence = s_dongle_blade_state.valid ? s_dongle_blade_state.sequence : 0;
         blade->age_ms = age_ms;
+        blade->battery_age_ms = battery_age_ms;
+        blade->battery_mv = s_dongle_blade_state.battery_mv;
+        blade->battery_percent = s_dongle_blade_state.battery_percent;
     }
     dongle_state_unlock();
 }
@@ -2234,8 +2280,8 @@ static const char s_dongle_status_index_prefix[] =
 "<h1>MoveToPlay 接收器</h1>"
 "<p class=\"sub\">连接 Wi-Fi：" DONGLE_WIFI_DISPLAY_AP_SSID "，然后打开 http://192.168.4.1/。</p>"
 "<section class=\"panel\"><h2>Blade 状态</h2>"
-"<div class=\"scroll\"><table><thead><tr><th>节点</th><th>状态</th><th>按键</th><th>最后数据</th><th>序号</th></tr></thead>"
-"<tbody id=\"blade\"><tr><td colspan=\"5\" class=\"muted\">加载中...</td></tr></tbody></table></div></section>"
+"<div class=\"scroll\"><table><thead><tr><th>节点</th><th>状态</th><th>按键</th><th>电量</th><th>最后数据</th><th>序号</th></tr></thead>"
+"<tbody id=\"blade\"><tr><td colspan=\"6\" class=\"muted\">加载中...</td></tr></tbody></table></div></section>"
 "<section class=\"panel\"><h2>Tracker 状态</h2>"
 "<div class=\"scroll\"><table><thead><tr><th>ID</th><th>节点</th><th>状态</th><th>电量</th><th>最后数据</th></tr></thead>"
 "<tbody id=\"nodes\"><tr><td colspan=\"5\" class=\"muted\">加载中...</td></tr></tbody></table></div>"
@@ -2248,7 +2294,7 @@ static const char s_dongle_status_index_suffix[] =
 "function esc(v){return String(v).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}"
 "function battery(n){return n.battery_known?n.battery_percent+'% ('+(n.battery_mv/1000).toFixed(2)+'V)':'未知';}"
 "function age(n){return n.seen?n.age_ms+' ms':'从未收到';}"
-"function bladeRow(b){const on=b&&b.online;const seen=b&&b.seen;const pressed=seen&&b.pressed;return '<tr><td>Blade '+(b?b.id:'')+'</td><td><span class=\"dot '+(on?'on':'off')+'\"></span>'+(on?'在线':'离线')+'</td><td>'+(pressed?'按下':'未按下')+'</td><td class=\"age\">'+(seen?b.age_ms+' ms':'从未收到')+'</td><td>'+(seen?b.sequence:'-')+'</td></tr>';}"
+"function bladeRow(b){const on=b&&b.online;const seen=b&&b.seen;const pressed=seen&&b.pressed;return '<tr><td>Blade '+(b?b.id:'')+'</td><td><span class=\"dot '+(on?'on':'off')+'\"></span>'+(on?'在线':'离线')+'</td><td>'+(pressed?'按下':'未按下')+'</td><td>'+battery(b||{})+'</td><td class=\"age\">'+(seen?b.age_ms+' ms':'从未收到')+'</td><td>'+(seen?b.sequence:'-')+'</td></tr>';}"
 "async function loadStatus(){try{const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw new Error(r.status);const d=await r.json();let html='';d.nodes.forEach(function(n){const on=n.online;html+='<tr><td>'+n.id+'</td><td>'+esc(n.name)+'</td><td><span class=\"dot '+(on?'on':'off')+'\"></span>'+(on?'在线':'离线')+'</td><td>'+battery(n)+'</td><td class=\"age\">'+age(n)+'</td></tr>';});document.getElementById('nodes').innerHTML=html;document.getElementById('blade').innerHTML=bladeRow(d.blade);document.getElementById('statusMsg').textContent='运行时间 '+Math.floor(d.uptime_ms/1000)+' 秒';}"
 "catch(e){document.getElementById('statusMsg').textContent='状态更新失败';document.getElementById('statusMsg').className='sub err';}}"
 "loadStatus();setInterval(loadStatus,1000);"
@@ -2481,16 +2527,24 @@ static esp_err_t dongle_status_api_get_handler(httpd_req_t *req)
     }
 
     const uint32_t blade_age_ms = (blade.age_ms == UINT32_MAX) ? 0 : blade.age_ms;
+    const uint32_t blade_battery_age_ms =
+        (blade.battery_age_ms == UINT32_MAX) ? 0 : blade.battery_age_ms;
     snprintf(chunk,
              sizeof(chunk),
              "],\"blade\":{\"id\":%u,\"name\":\"blade\",\"seen\":%s,\"online\":%s,"
-             "\"pressed\":%s,\"age_ms\":%" PRIu32 ",\"sequence\":%" PRIu32 "}}",
+             "\"pressed\":%s,\"age_ms\":%" PRIu32 ",\"sequence\":%" PRIu32 ","
+             "\"battery_known\":%s,\"battery_percent\":%u,"
+             "\"battery_mv\":%u,\"battery_age_ms\":%" PRIu32 "}}",
              blade.node_id,
              blade.seen ? "true" : "false",
              blade.online ? "true" : "false",
              blade.pressed ? "true" : "false",
              blade_age_ms,
-             blade.sequence);
+             blade.sequence,
+             blade.battery_valid ? "true" : "false",
+             blade.battery_valid ? blade.battery_percent : 0,
+             blade.battery_valid ? blade.battery_mv : 0,
+             blade_battery_age_ms);
     err = httpd_resp_sendstr_chunk(req, chunk);
     if (err != ESP_OK) {
         return err;
@@ -2853,11 +2907,35 @@ static esp_err_t dongle_wifi_display_start(void)
         return err;
     }
 
+#if DONGLE_ENABLE_USB_KEYBOARD || DONGLE_ENABLE_USB_MOUSE
+    if (s_dongle_hid_mutex != NULL) {
+        (void)xSemaphoreTake(s_dongle_hid_mutex, portMAX_DELAY);
+    }
+#endif
+
     s_dongle_wifi_display_active = true;
+
+#if DONGLE_ENABLE_RF_INFERENCE && DONGLE_ENABLE_HID_ACTION_LOG
+    dongle_release_hold_actions();
+#endif
+
+#if DONGLE_ENABLE_USB_KEYBOARD || DONGLE_ENABLE_USB_MOUSE
+    err = usb_keyboard_switch_to_serial_jtag();
+    if (s_dongle_hid_mutex != NULL) {
+        (void)xSemaphoreGive(s_dongle_hid_mutex);
+    }
+    if (err != ESP_OK) {
+        s_dongle_wifi_display_active = false;
+        ESP_LOGW(TAG, "USB maintenance mode switch failed: %s", esp_err_to_name(err));
+        return err;
+    }
+#endif
+
     status_led_set_color(0, 0, 20);
     ESP_LOGI(TAG,
              "Wi-Fi display mode ready: ssid=%s url=http://192.168.4.1/",
              DONGLE_WIFI_DISPLAY_AP_SSID);
+    ESP_LOGI(TAG, "USB HID disabled; hardware USB Serial/JTAG COM port is active for flashing");
     ESP_LOGI(TAG,
              "Wi-Fi display mode throttles ESP-NOW status updates to %d ms/node and pauses RF/HID processing",
              DONGLE_WIFI_DISPLAY_STATUS_UPDATE_MS);
@@ -3015,12 +3093,20 @@ static void espnow_rx_task(void *arg)
 #if DONGLE_ENABLE_SERIAL_OUTPUT
         now_tick = xTaskGetTickCount();
         if ((now_tick - last_print_tick) >= print_period_ticks) {
+#if DONGLE_ENABLE_USB_KEYBOARD || DONGLE_ENABLE_USB_MOUSE
+            if (s_dongle_hid_mutex != NULL) {
+                (void)xSemaphoreTake(s_dongle_hid_mutex, portMAX_DELAY);
+            }
+#endif
             if (!s_dongle_wifi_display_active) {
                 dongle_print_latest_states();
-            }
 #if DONGLE_ENABLE_RF_INFERENCE
-            if (!s_dongle_wifi_display_active) {
                 dongle_run_rf_inference(esp_timer_get_time());
+#endif
+            }
+#if DONGLE_ENABLE_USB_KEYBOARD || DONGLE_ENABLE_USB_MOUSE
+            if (s_dongle_hid_mutex != NULL) {
+                (void)xSemaphoreGive(s_dongle_hid_mutex);
             }
 #endif
             last_print_tick += print_period_ticks;
@@ -3204,7 +3290,7 @@ static void blade_confirm_wake_hold_or_sleep(void)
             blade_enter_deep_sleep("wake_hold_released");
             return;
         }
-        vTaskDelay(pdMS_TO_TICKS(BLADE_REPORT_PERIOD_MS));
+        vTaskDelay(pdMS_TO_TICKS(BLADE_POLL_PERIOD_MS));
     }
 
     ESP_LOGI(TAG, "Blade wake hold confirmed, starting normal mode");
@@ -3213,8 +3299,8 @@ static void blade_confirm_wake_hold_or_sleep(void)
 
 typedef enum {
     BLADE_SLEEP_GESTURE_IDLE = 0,
-    BLADE_SLEEP_GESTURE_WAIT_SECOND_PRESS,
-    BLADE_SLEEP_GESTURE_SECOND_HOLD,
+    BLADE_SLEEP_GESTURE_COLLECT_SHORT_PRESSES,
+    BLADE_SLEEP_GESTURE_FINAL_HOLD,
 } blade_sleep_gesture_state_t;
 
 static void blade_report_task(void *arg)
@@ -3222,17 +3308,20 @@ static void blade_report_task(void *arg)
     (void)arg;
 
     TickType_t last_wake = xTaskGetTickCount();
+    TickType_t last_report_tick = 0;
+    TickType_t last_send_error_log_tick = 0;
     uint32_t sequence = 0;
+    uint8_t report_burst_remaining = BLADE_STATE_CHANGE_BURST_COUNT;
     bool last_raw_pressed = blade_button_is_pressed();
     bool stable_pressed = last_raw_pressed;
     uint8_t same_sample_count = BLADE_DEBOUNCE_SAMPLES;
     blade_sleep_gesture_state_t sleep_gesture_state = BLADE_SLEEP_GESTURE_IDLE;
+    uint8_t sleep_short_press_count = 0;
     TickType_t press_start_tick = last_wake;
-    TickType_t first_click_release_tick = 0;
-    TickType_t second_hold_start_tick = 0;
+    TickType_t last_short_release_tick = 0;
+    TickType_t final_hold_start_tick = 0;
 #if BLADE_ENABLE_SERIAL_OUTPUT
     TickType_t last_serial_tick = 0;
-    bool force_serial_print = true;
 #endif
 
     led_set(stable_pressed);
@@ -3265,76 +3354,123 @@ static void blade_report_task(void *arg)
         if (state_changed) {
             if (stable_pressed) {
                 press_start_tick = now_tick;
-                if (sleep_gesture_state == BLADE_SLEEP_GESTURE_WAIT_SECOND_PRESS &&
-                    elapsed_ms_since(first_click_release_tick, now_tick) <= BLADE_SLEEP_DOUBLE_CLICK_GAP_MS) {
-                    sleep_gesture_state = BLADE_SLEEP_GESTURE_SECOND_HOLD;
-                    second_hold_start_tick = now_tick;
+                if (sleep_gesture_state == BLADE_SLEEP_GESTURE_COLLECT_SHORT_PRESSES &&
+                    sleep_short_press_count >= BLADE_SLEEP_SHORT_PRESS_COUNT &&
+                    elapsed_ms_since(last_short_release_tick, now_tick) <= BLADE_SLEEP_SEQUENCE_GAP_MS) {
+                    sleep_gesture_state = BLADE_SLEEP_GESTURE_FINAL_HOLD;
+                    final_hold_start_tick = now_tick;
                     ESP_LOGI(TAG,
-                             "Blade sleep gesture: second press detected, hold %d ms to sleep",
+                             "Blade sleep gesture: final hold detected after %u short presses, hold %d ms to sleep",
+                             sleep_short_press_count,
                              BLADE_SLEEP_HOLD_MS);
-                    printf("# blade-sleep-gesture: stage=second_hold hold_required_ms=%d\n",
+                    printf("# blade-sleep-gesture: stage=final_hold short_count=%u hold_required_ms=%d\n",
+                           sleep_short_press_count,
                            BLADE_SLEEP_HOLD_MS);
                 }
             } else {
                 const uint32_t press_ms = elapsed_ms_since(press_start_tick, now_tick);
-                if (sleep_gesture_state == BLADE_SLEEP_GESTURE_SECOND_HOLD) {
+                if (sleep_gesture_state == BLADE_SLEEP_GESTURE_FINAL_HOLD) {
                     sleep_gesture_state = BLADE_SLEEP_GESTURE_IDLE;
+                    sleep_short_press_count = 0;
                     ESP_LOGI(TAG, "Blade sleep gesture cancelled before long hold");
                     printf("# blade-sleep-gesture: stage=cancelled press_ms=%" PRIu32 "\n",
                            press_ms);
-                } else if (sleep_gesture_state == BLADE_SLEEP_GESTURE_IDLE &&
-                           press_ms <= BLADE_SLEEP_FIRST_CLICK_MAX_MS) {
-                    sleep_gesture_state = BLADE_SLEEP_GESTURE_WAIT_SECOND_PRESS;
-                    first_click_release_tick = now_tick;
+                } else if (press_ms <= BLADE_SLEEP_SHORT_PRESS_MAX_MS) {
+                    if (sleep_gesture_state == BLADE_SLEEP_GESTURE_COLLECT_SHORT_PRESSES &&
+                        elapsed_ms_since(last_short_release_tick, now_tick) <= BLADE_SLEEP_SEQUENCE_GAP_MS) {
+                        if (sleep_short_press_count < UINT8_MAX) {
+                            sleep_short_press_count++;
+                        }
+                    } else {
+                        sleep_short_press_count = 1;
+                    }
+
+                    sleep_gesture_state = BLADE_SLEEP_GESTURE_COLLECT_SHORT_PRESSES;
+                    last_short_release_tick = now_tick;
                     ESP_LOGI(TAG,
-                             "Blade sleep gesture: first click detected, waiting %d ms for second press",
-                             BLADE_SLEEP_DOUBLE_CLICK_GAP_MS);
-                    printf("# blade-sleep-gesture: stage=first_click press_ms=%" PRIu32 "\n",
+                             "Blade sleep gesture: short press %u/%u, next press must start within %d ms",
+                             sleep_short_press_count,
+                             BLADE_SLEEP_SHORT_PRESS_COUNT,
+                             BLADE_SLEEP_SEQUENCE_GAP_MS);
+                    printf("# blade-sleep-gesture: stage=short_press count=%u required=%u press_ms=%" PRIu32 "\n",
+                           sleep_short_press_count,
+                           BLADE_SLEEP_SHORT_PRESS_COUNT,
+                           press_ms);
+                } else if (sleep_gesture_state != BLADE_SLEEP_GESTURE_IDLE) {
+                    sleep_gesture_state = BLADE_SLEEP_GESTURE_IDLE;
+                    sleep_short_press_count = 0;
+                    ESP_LOGI(TAG, "Blade sleep gesture cancelled by long non-final press");
+                    printf("# blade-sleep-gesture: stage=cancelled_long_press press_ms=%" PRIu32 "\n",
                            press_ms);
                 }
             }
         }
 
-        if (sleep_gesture_state == BLADE_SLEEP_GESTURE_WAIT_SECOND_PRESS &&
-            elapsed_ms_since(first_click_release_tick, now_tick) > BLADE_SLEEP_DOUBLE_CLICK_GAP_MS) {
+        if (sleep_gesture_state == BLADE_SLEEP_GESTURE_COLLECT_SHORT_PRESSES &&
+            elapsed_ms_since(last_short_release_tick, now_tick) > BLADE_SLEEP_SEQUENCE_GAP_MS) {
             sleep_gesture_state = BLADE_SLEEP_GESTURE_IDLE;
+            sleep_short_press_count = 0;
         }
 
-        if (sleep_gesture_state == BLADE_SLEEP_GESTURE_SECOND_HOLD &&
+        if (sleep_gesture_state == BLADE_SLEEP_GESTURE_FINAL_HOLD &&
             stable_pressed &&
-            elapsed_ms_since(second_hold_start_tick, now_tick) >= BLADE_SLEEP_HOLD_MS) {
-            blade_enter_deep_sleep("double_click_long_hold");
+            elapsed_ms_since(final_hold_start_tick, now_tick) >= BLADE_SLEEP_HOLD_MS) {
+            blade_enter_deep_sleep("quad_click_long_hold");
         }
 
-        esp_err_t send_err = ESP_OK;
-#if MOVE_TO_PLAY_ENABLE_ESPNOW
-        send_err = m2p_espnow_send_blade_state(BLADE_NODE_ID, sequence, stable_pressed);
-        if (send_err != ESP_OK &&
-            (sequence % BLADE_REPORT_RATE_HZ) == 0) {
-            ESP_LOGW(TAG,
-                     "ESP-NOW blade state send failed: %s",
-                     esp_err_to_name(send_err));
+        if (state_changed) {
+            report_burst_remaining = BLADE_STATE_CHANGE_BURST_COUNT;
         }
+
+        const uint32_t report_period_ms = stable_pressed ?
+            BLADE_PRESSED_REPORT_PERIOD_MS : BLADE_IDLE_HEARTBEAT_PERIOD_MS;
+        const bool periodic_report_due =
+            elapsed_ms_since(last_report_tick, now_tick) >= report_period_ms;
+        const bool should_report = (report_burst_remaining > 0) || periodic_report_due;
+
+        if (should_report) {
+            esp_err_t send_err = ESP_OK;
+#if MOVE_TO_PLAY_ENABLE_ESPNOW
+            send_err = m2p_espnow_send_blade_state(BLADE_NODE_ID,
+                                                   sequence,
+                                                   stable_pressed,
+                                                   s_local_battery_valid,
+                                                   s_local_battery_percent,
+                                                   s_local_battery_mv);
+            if (send_err != ESP_OK &&
+                (last_send_error_log_tick == 0 ||
+                 elapsed_ms_since(last_send_error_log_tick, now_tick) >= 1000U)) {
+                ESP_LOGW(TAG,
+                         "ESP-NOW blade state send failed: %s",
+                         esp_err_to_name(send_err));
+                last_send_error_log_tick = now_tick;
+            }
 #endif
 #if BLADE_ENABLE_SERIAL_OUTPUT
-        if (force_serial_print ||
-            state_changed ||
-            (now_tick - last_serial_tick) >= pdMS_TO_TICKS(BLADE_SERIAL_STATE_PERIOD_MS)) {
-            printf("# blade-tx: node_id=%u pressed=%d raw_pressed=%d gpio=%d"
-                   " seq=%" PRIu32 " send=%s\n",
-                   BLADE_NODE_ID,
-                   stable_pressed ? 1 : 0,
-                   raw_pressed ? 1 : 0,
-                   gpio_level,
-                   sequence,
-                   esp_err_to_name(send_err));
-            last_serial_tick = now_tick;
-            force_serial_print = false;
-        }
+            if (state_changed ||
+                (now_tick - last_serial_tick) >= pdMS_TO_TICKS(BLADE_SERIAL_STATE_PERIOD_MS)) {
+                printf("# blade-tx: node_id=%u pressed=%d raw_pressed=%d gpio=%d"
+                       " seq=%" PRIu32 " battery_valid=%d battery=%u%% battery_mv=%u send=%s\n",
+                       BLADE_NODE_ID,
+                       stable_pressed ? 1 : 0,
+                       raw_pressed ? 1 : 0,
+                       gpio_level,
+                       sequence,
+                       s_local_battery_valid ? 1 : 0,
+                       s_local_battery_valid ? s_local_battery_percent : 0,
+                       s_local_battery_valid ? s_local_battery_mv : 0,
+                       esp_err_to_name(send_err));
+                last_serial_tick = now_tick;
+            }
 #endif
-        sequence++;
+            if (report_burst_remaining > 0) {
+                report_burst_remaining--;
+            }
+            last_report_tick = now_tick;
+            sequence++;
+        }
 
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(BLADE_REPORT_PERIOD_MS));
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(BLADE_POLL_PERIOD_MS));
     }
 }
 
@@ -3360,6 +3496,16 @@ static void start_dongle_mode(void)
         s_dongle_state_mutex = xSemaphoreCreateMutex();
         if (s_dongle_state_mutex == NULL) {
             ESP_LOGW(TAG, "dongle state mutex alloc failed");
+            return;
+        }
+    }
+#endif
+
+#if DONGLE_ENABLE_USB_KEYBOARD || DONGLE_ENABLE_USB_MOUSE
+    if (s_dongle_hid_mutex == NULL) {
+        s_dongle_hid_mutex = xSemaphoreCreateMutex();
+        if (s_dongle_hid_mutex == NULL) {
+            ESP_LOGW(TAG, "dongle HID mutex alloc failed");
             return;
         }
     }
@@ -3487,7 +3633,12 @@ static void start_blade_mode(void)
              BLADE_BUTTON_GPIO);
     ESP_LOGI(TAG, "node_id=%d", BLADE_NODE_ID);
     ESP_LOGI(TAG, "esp-now channel=%d", M2P_ESPNOW_CHANNEL);
-    ESP_LOGI(TAG, "report_rate_hz=%d", BLADE_REPORT_RATE_HZ);
+    ESP_LOGI(TAG,
+             "poll_rate_hz=%d idle_heartbeat_hz=%d pressed_report_hz=%d burst_count=%d",
+             BLADE_POLL_RATE_HZ,
+             BLADE_IDLE_HEARTBEAT_RATE_HZ,
+             BLADE_PRESSED_REPORT_RATE_HZ,
+             BLADE_STATE_CHANGE_BURST_COUNT);
 
     led_set(false);
 
@@ -3522,6 +3673,11 @@ static void battery_monitor_task(void *arg)
 {
     (void)arg;
 
+    const uint8_t battery_node_id =
+        (MOVE_TO_PLAY_DEVICE_MODE == MOVE_TO_PLAY_MODE_BLADE) ? BLADE_NODE_ID : BOARD_NODE_ID;
+    const char *battery_node_name =
+        (MOVE_TO_PLAY_DEVICE_MODE == MOVE_TO_PLAY_MODE_BLADE) ? "blade" : tracker_node_name(BOARD_NODE_ID);
+
     battery_monitor_init(BATTERY_ADC_UNIT, BATTERY_ADC_CHANNEL, BATTERY_ADC_GPIO);
     vTaskDelay(pdMS_TO_TICKS(500));
 
@@ -3531,21 +3687,23 @@ static void battery_monitor_task(void *arg)
         uint16_t voltage_mv = battery_voltage_to_mv(voltage);
 
         if (voltage > 0.0f) {
-            s_tracker_battery_percent = (uint8_t)percent;
-            s_tracker_battery_mv = voltage_mv;
-            s_tracker_battery_valid = true;
+            s_local_battery_percent = (uint8_t)percent;
+            s_local_battery_mv = voltage_mv;
+            s_local_battery_valid = true;
         } else {
-            s_tracker_battery_valid = false;
+            s_local_battery_valid = false;
         }
 
         printf("# battery: node_id=%d node_name=%s board_style=%d board_name=%s %.2fV  %d%%\n",
-               BOARD_NODE_ID,
-               tracker_node_name(BOARD_NODE_ID),
+               battery_node_id,
+               battery_node_name,
                MOVE_TO_PLAY_TRACKER_BOARD_STYLE,
                MOVE_TO_PLAY_TRACKER_BOARD_NAME,
                (double)voltage,
                percent);
-        status_led_set_battery_color(percent);
+        if (MOVE_TO_PLAY_DEVICE_MODE == MOVE_TO_PLAY_MODE_TRACKER) {
+            status_led_set_battery_color(percent);
+        }
 
         vTaskDelay(pdMS_TO_TICKS(BATTERY_REPORT_INTERVAL_MS));
     }
@@ -3579,6 +3737,13 @@ void app_main(void)
                                 tskNO_AFFINITY);
         start_tracker_mode();
     } else {
+        xTaskCreatePinnedToCore(battery_monitor_task,
+                                "battery_task",
+                                3072,
+                                NULL,
+                                3,
+                                NULL,
+                                tskNO_AFFINITY);
         start_blade_mode();
     }
 }
