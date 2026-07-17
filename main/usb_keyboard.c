@@ -3,6 +3,7 @@
 #include <stddef.h>
 
 #include "class/hid/hid_device.h"
+#include "driver/usb_serial_jtag.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -21,6 +22,7 @@ static const char *TAG = "usb_keyboard";
 #define USB_HID_SEND_RETRY_MS   2
 
 static bool s_usb_keyboard_installed = false;
+static bool s_usb_serial_jtag_mode = false;
 static uint8_t s_mouse_buttons = 0;
 
 static const uint8_t s_hid_report_descriptor[] = {
@@ -98,6 +100,66 @@ esp_err_t usb_keyboard_init(void)
         ESP_LOGI(TAG, "USB HID keyboard+mouse initialized");
     }
     return err;
+}
+
+esp_err_t usb_keyboard_switch_to_serial_jtag(void)
+{
+    if (s_usb_serial_jtag_mode) {
+        return ESP_OK;
+    }
+
+    ESP_RETURN_ON_FALSE(s_usb_keyboard_installed,
+                        ESP_ERR_INVALID_STATE,
+                        TAG,
+                        "USB HID is not installed");
+    ESP_RETURN_ON_FALSE(!usb_serial_jtag_is_driver_installed(),
+                        ESP_ERR_INVALID_STATE,
+                        TAG,
+                        "USB Serial/JTAG driver is already installed");
+
+    if (usb_keyboard_is_ready()) {
+        esp_err_t keyboard_err = usb_keyboard_release();
+        if (keyboard_err != ESP_OK) {
+            ESP_LOGW(TAG, "Release keyboard before USB mode switch failed: %s",
+                     esp_err_to_name(keyboard_err));
+        }
+
+        esp_err_t mouse_err = usb_mouse_release_buttons();
+        if (mouse_err != ESP_OK) {
+            ESP_LOGW(TAG, "Release mouse before USB mode switch failed: %s",
+                     esp_err_to_name(mouse_err));
+        }
+
+        /* Allow the host to consume the final all-released HID reports. */
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+
+    esp_err_t err = tinyusb_driver_uninstall();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Uninstall TinyUSB HID failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    s_usb_keyboard_installed = false;
+    s_mouse_buttons = 0;
+
+    usb_serial_jtag_driver_config_t serial_jtag_cfg =
+        USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+    err = usb_serial_jtag_driver_install(&serial_jtag_cfg);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Enable USB Serial/JTAG failed: %s; restoring HID",
+                 esp_err_to_name(err));
+        esp_err_t restore_err = usb_keyboard_init();
+        if (restore_err != ESP_OK) {
+            ESP_LOGE(TAG, "Restore USB HID failed: %s", esp_err_to_name(restore_err));
+        }
+        return err;
+    }
+
+    s_usb_serial_jtag_mode = true;
+    ESP_LOGI(TAG, "USB switched from HID keyboard/mouse to hardware Serial/JTAG");
+    return ESP_OK;
 }
 
 bool usb_keyboard_is_ready(void)
