@@ -40,6 +40,7 @@ typedef enum {
 #define USB_MOUSE_BUTTON_FORWARD 0x10
 
 esp_err_t usb_keyboard_init(void);
+esp_err_t usb_keyboard_switch_to_serial_jtag(void);
 bool usb_keyboard_is_ready(void);
 esp_err_t usb_keyboard_press_keys(uint8_t modifier, const uint8_t keycodes[6]);
 esp_err_t usb_keyboard_release(void);
