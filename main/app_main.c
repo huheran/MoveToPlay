@@ -1729,14 +1729,74 @@ static bool dongle_action_sustain_fire_frame(uint8_t class_idx, const dongle_key
     return s_dongle_sustain_count[class_idx] == required_frames;
 }
 
-static void dongle_fire_action(uint8_t class_idx, const dongle_key_action_t *action, int64_t now_us)
+static int8_t dongle_jump_movement_class(int64_t now_us)
+{
+    if (s_dongle_keyboard_hold_class >= 0 &&
+        dongle_is_movement_hold_class((uint8_t)s_dongle_keyboard_hold_class)) {
+        return s_dongle_keyboard_hold_class;
+    }
+
+    if (s_dongle_resume_state_class >= 0 &&
+        now_us <= s_dongle_resume_state_until_us &&
+        dongle_is_movement_hold_class((uint8_t)s_dongle_resume_state_class)) {
+        return s_dongle_resume_state_class;
+    }
+
+    return -1;
+}
+
+static esp_err_t dongle_tap_key_with_movement(uint8_t movement_class,
+                                               const dongle_key_action_t *tap_action)
+{
+    const dongle_key_action_t *movement_action = &s_dongle_key_actions[movement_class];
+    const uint8_t modifier = movement_action->modifier | tap_action->modifier;
+    const uint8_t keycodes[6] = {
+        movement_action->keycode,
+        tap_action->keycode,
+        0, 0, 0, 0,
+    };
+
+    esp_err_t err = usb_keyboard_press_keys(modifier, keycodes);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(DONGLE_KEY_TAP_HOLD_MS));
+
+    const uint8_t movement_keys[6] = { movement_action->keycode, 0, 0, 0, 0, 0 };
+    err = usb_keyboard_press_keys(movement_action->modifier, movement_keys);
+    if (err == ESP_OK) {
+        s_dongle_keyboard_hold_class = (int8_t)movement_class;
+    } else {
+        /* Force the normal HOLD path to retry the movement report next frame. */
+        s_dongle_keyboard_hold_class = -1;
+    }
+    return err;
+}
+
+static void dongle_fire_action(uint8_t class_idx,
+                               const dongle_key_action_t *action,
+                               int64_t now_us,
+                               int8_t jump_movement_class)
 {
     if (action->type == ACTION_TYPE_KEY_TAP) {
         esp_err_t err = ESP_OK;
 #if DONGLE_ENABLE_USB_KEYBOARD
-        err = usb_keyboard_tap_key(action->modifier, action->keycode, DONGLE_KEY_TAP_HOLD_MS);
+        if (class_idx == DONGLE_JUMP_CLASS && jump_movement_class >= 0) {
+            err = dongle_tap_key_with_movement((uint8_t)jump_movement_class, action);
+        } else {
+            err = usb_keyboard_tap_key(action->modifier, action->keycode, DONGLE_KEY_TAP_HOLD_MS);
+        }
 #endif
-        dongle_log_key_event(class_idx, "key_tap", action->modifier, action->keycode, err);
+        const uint8_t logged_modifier =
+            (class_idx == DONGLE_JUMP_CLASS && jump_movement_class >= 0) ?
+            (uint8_t)(s_dongle_key_actions[jump_movement_class].modifier | action->modifier) :
+            action->modifier;
+        dongle_log_key_event(class_idx,
+                             jump_movement_class >= 0 ? "key_tap_with_movement" : "key_tap",
+                             logged_modifier,
+                             action->keycode,
+                             err);
     } else if (action->type == ACTION_TYPE_CHARACTER_CYCLE) {
         static const uint8_t character_keys[] = {HID_KEY_1, HID_KEY_2, HID_KEY_3, HID_KEY_4};
         const uint8_t keycode = character_keys[s_dongle_character_slot];
@@ -1843,6 +1903,10 @@ static void dongle_send_key_action(uint8_t infer_class, float infer_confidence, 
         dongle_try_keep_movement_after_blade(&class_idx, now_us);
 
     const dongle_key_action_t *action = &s_dongle_key_actions[class_idx];
+    const int8_t jump_movement_class =
+        (class_idx == DONGLE_JUMP_CLASS && action->type == ACTION_TYPE_KEY_TAP) ?
+        dongle_jump_movement_class(now_us) :
+        -1;
 
     /* Update sustain counters: increment for current class, reset others */
     for (uint8_t i = 0; i < DONGLE_NUM_CLASSES; i++) {
@@ -1933,7 +1997,13 @@ static void dongle_send_key_action(uint8_t infer_class, float infer_confidence, 
         dongle_release_timed_mouse_hold(true, now_us);
     } else {
         /* Release held actions before tap/move actions */
-        dongle_release_hold_actions();
+        if (jump_movement_class >= 0) {
+            /* Keep W (and Shift while running) in the same HID report as jump. */
+            dongle_release_mouse_hold();
+            dongle_release_timed_mouse_hold(true, now_us);
+        } else {
+            dongle_release_hold_actions();
+        }
     }
 
     /* Handle tap-like actions based on trigger mode */
@@ -1987,7 +2057,7 @@ static void dongle_send_key_action(uint8_t infer_class, float infer_confidence, 
     }
 
     if (should_fire) {
-        dongle_fire_action(class_idx, action, now_us);
+        dongle_fire_action(class_idx, action, now_us, jump_movement_class);
         s_dongle_last_fire_us[class_idx] = now_us;
         if (dongle_is_turn_class(class_idx)) {
             s_dongle_last_turn_fire_class = (int8_t)class_idx;
