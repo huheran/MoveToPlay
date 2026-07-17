@@ -27,9 +27,9 @@ static const char *const s_class_key_text[RF_MODEL_CLASS_COUNT] = {
     "-",       /* idle */
     "SPACE",   /* jump */
     "E",       /* kick */
-    "-",       /* left_hand_raise */
+    "M",       /* left_hand_raise */
     "-",       /* move_noise */
-    "-",       /* right_hand_raise */
+    "X",       /* right_hand_raise */
     "LMB",     /* right_hand_slash */
     "SHIFT+W", /* run */
     "MOUSE_L", /* turn_left */
