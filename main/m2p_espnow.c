@@ -221,18 +221,35 @@ esp_err_t m2p_espnow_send_tracker_sample(uint8_t node_id,
 
 esp_err_t m2p_espnow_send_blade_state(uint8_t node_id,
                                        uint32_t sequence,
-                                       bool pressed)
+                                       bool pressed,
+                                       bool battery_valid,
+                                       uint8_t battery_percent,
+                                       uint16_t battery_mv)
 {
     ESP_RETURN_ON_FALSE(s_espnow_ready, ESP_ERR_INVALID_STATE, TAG, "esp-now not ready");
+
+    if (battery_percent > 100U) {
+        battery_valid = false;
+        battery_percent = M2P_ESPNOW_BATTERY_PERCENT_UNKNOWN;
+        battery_mv = 0;
+    }
+
+    uint8_t flags = pressed ? M2P_ESPNOW_BLADE_FLAG_PRESSED : 0;
+    if (battery_valid) {
+        flags |= M2P_ESPNOW_BLADE_FLAG_BATTERY_VALID;
+    }
 
     m2p_espnow_packet_t packet = {
         .magic = M2P_ESPNOW_MAGIC,
         .version = M2P_ESPNOW_PACKET_VERSION,
         .type = M2P_ESPNOW_PACKET_BLADE_STATE,
         .node_id = node_id,
-        .flags = pressed ? M2P_ESPNOW_BLADE_FLAG_PRESSED : 0,
+        .flags = flags,
         .sequence = sequence,
         .timestamp_us = (uint32_t)esp_timer_get_time(),
+        .battery_mv = battery_valid ? battery_mv : 0,
+        .battery_percent = battery_valid ? battery_percent : M2P_ESPNOW_BATTERY_PERCENT_UNKNOWN,
+        .reserved = 0,
     };
 
     return esp_now_send(s_broadcast_addr, (const uint8_t *)&packet, sizeof(packet));
