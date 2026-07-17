@@ -823,6 +823,7 @@ static void dongle_print_latest_states(void)
 #define DONGLE_STATE_EVENT_BRIDGE_MS  320
 #define DONGLE_CONFIRM_FRAMES         3
 #define DONGLE_MOVEMENT_CONFIRM_FRAMES 4
+#define DONGLE_JUMP_ENTRY_CONFIDENCE 0.40f
 #define DONGLE_MOVEMENT_ENTRY_CONFIDENCE 0.52f
 #define DONGLE_INFER_RATE_HZ          25
 
@@ -902,6 +903,7 @@ typedef struct {
 
 #define DONGLE_NUM_CLASSES RF_MODEL_CLASS_COUNT
 #define DONGLE_IDLE_CLASS 3
+#define DONGLE_JUMP_CLASS 4
 #define DONGLE_LEFT_HAND_RAISE_CLASS 6
 #define DONGLE_MOVE_NOISE_CLASS 7
 #define DONGLE_RIGHT_HAND_RAISE_CLASS 8
@@ -1538,6 +1540,10 @@ static bool dongle_is_movement_hold_class(uint8_t class_idx)
 static float dongle_effective_min_confidence(uint8_t class_idx)
 {
     const float configured_confidence = dongle_action_min_confidence(class_idx);
+    if (class_idx == DONGLE_JUMP_CLASS &&
+        configured_confidence > DONGLE_JUMP_ENTRY_CONFIDENCE) {
+        return DONGLE_JUMP_ENTRY_CONFIDENCE;
+    }
     if (dongle_is_movement_hold_class(class_idx) &&
         configured_confidence > DONGLE_MOVEMENT_ENTRY_CONFIDENCE) {
         return DONGLE_MOVEMENT_ENTRY_CONFIDENCE;
