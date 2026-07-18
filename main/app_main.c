@@ -882,6 +882,7 @@ static void dongle_print_latest_states(void)
 #define DONGLE_CONFIRM_FRAMES         3
 #define DONGLE_MOVEMENT_CONFIRM_FRAMES 4
 #define DONGLE_MOVEMENT_ENTRY_CONFIDENCE 0.52f
+#define DONGLE_JUMP_MOVE_HOLD_GRACE_MS 200
 #define DONGLE_INFER_RATE_HZ          25
 
 #define DONGLE_ARRAY_SIZE(a)          (sizeof(a) / sizeof((a)[0]))
@@ -1575,6 +1576,7 @@ static int64_t s_dongle_last_state_us = 0;
 static int8_t s_dongle_resume_state_class = -1;
 static int64_t s_dongle_resume_state_until_us = 0;
 static int64_t s_dongle_last_blade_pressed_us = 0;
+static int64_t s_dongle_last_jump_move_fire_us = 0;
 static bool s_dongle_edge_armed[DONGLE_NUM_CLASSES] = {0};
 static bool s_dongle_edge_armed_ready = false;
 static uint16_t s_dongle_sustain_count[DONGLE_NUM_CLASSES] = {0};
@@ -1920,6 +1922,9 @@ static void dongle_fire_action(uint8_t class_idx,
 #if DONGLE_ENABLE_USB_KEYBOARD
         if (class_idx == DONGLE_JUMP_CLASS && jump_movement_class >= 0) {
             err = dongle_tap_key_with_movement((uint8_t)jump_movement_class, action);
+            if (err == ESP_OK) {
+                s_dongle_last_jump_move_fire_us = now_us;
+            }
         } else {
             err = usb_keyboard_tap_key(action->modifier, action->keycode, DONGLE_KEY_TAP_HOLD_MS);
         }
@@ -2074,6 +2079,22 @@ static void dongle_send_key_action(uint8_t infer_class, float infer_confidence, 
             s_dongle_hid_status = "idle_or_uncertain";
         } else {
             s_dongle_hid_status = "no_action";
+        }
+        if (s_dongle_keyboard_hold_class >= 0 &&
+            dongle_is_movement_hold_class((uint8_t)s_dongle_keyboard_hold_class) &&
+            s_dongle_last_jump_move_fire_us > 0) {
+            const int64_t since_jump_move_us =
+                now_us - s_dongle_last_jump_move_fire_us;
+            if (since_jump_move_us >= 0 &&
+                since_jump_move_us <
+                    ((int64_t)DONGLE_JUMP_MOVE_HOLD_GRACE_MS * 1000LL)) {
+                /* Just did a jump-with-movement tap; keep W held through
+                 * the landing-phase move_noise frames so the player doesn't
+                 * stop walking immediately after landing. */
+                dongle_release_mouse_hold();
+                dongle_release_timed_mouse_hold(true, now_us);
+                return;
+            }
         }
         dongle_release_hold_actions();
         return;
