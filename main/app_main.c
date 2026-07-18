@@ -179,6 +179,13 @@ static const char *TAG = "imu_main";
 #define DONGLE_BLADE_TURN_DEADZONE_DPS 8.0f
 #define DONGLE_BLADE_TURN_SENSITIVITY 10.0f /* mouse px per integrated gyro degree */
 #define DONGLE_BLADE_TURN_MAX_STEP_DELTA 80
+/* Chest gx is the shoulder-axis rotation used for looking up/down while Blade is held. */
+#define DONGLE_BLADE_PITCH_GYRO_AXIS  0
+/* USB mouse Y is positive downward. Flip this sign if the mounted chest tracker is inverted. */
+#define DONGLE_BLADE_PITCH_GYRO_SIGN  1.0f
+#define DONGLE_BLADE_PITCH_DEADZONE_DPS 8.0f
+#define DONGLE_BLADE_PITCH_SENSITIVITY 8.0f /* lower than horizontal to reduce vertical jitter */
+#define DONGLE_BLADE_PITCH_MAX_STEP_DELTA 64
 #define DONGLE_BLADE_TURN_CHEST_MAX_AGE_MS 150
 
 #define BLADE_NODE_ID                 100
@@ -457,6 +464,7 @@ static int64_t s_dongle_display_last_tracker_store_us[DONGLE_MAX_TRACKER_NODES];
 #if DONGLE_ENABLE_USB_MOUSE
 static int64_t s_dongle_last_blade_turn_us = 0;
 static float s_dongle_blade_turn_dx_remainder = 0.0f;
+static float s_dongle_blade_turn_dy_remainder = 0.0f;
 #endif
 #if DONGLE_ENABLE_ACTION_DEBUG_OUTPUT
 static int64_t s_dongle_last_rf_print_us = 0;
@@ -626,9 +634,10 @@ static bool dongle_blade_pressed_fresh(int64_t now_us)
 }
 
 #if DONGLE_ENABLE_USB_MOUSE
-static float dongle_blade_turn_gyro_dps(const m2p_espnow_tracker_packet_t *packet)
+static float dongle_blade_gyro_axis_dps(const m2p_espnow_tracker_packet_t *packet,
+                                         uint8_t axis)
 {
-    switch (DONGLE_BLADE_TURN_GYRO_AXIS) {
+    switch (axis) {
     case 0:
         return packet->gyro_dps[0];
     case 1:
@@ -638,6 +647,32 @@ static float dongle_blade_turn_gyro_dps(const m2p_espnow_tracker_packet_t *packe
     default:
         return 0.0f;
     }
+}
+
+static float dongle_blade_apply_gyro_deadzone(float gyro_dps, float deadzone_dps)
+{
+    return (gyro_dps > -deadzone_dps && gyro_dps < deadzone_dps) ? 0.0f : gyro_dps;
+}
+
+static int16_t dongle_blade_integrate_mouse_delta(float gyro_dps,
+                                                   float dt_s,
+                                                   float sensitivity,
+                                                   int16_t max_step_delta,
+                                                   float *remainder)
+{
+    const float delta_f = (gyro_dps * dt_s * sensitivity) + *remainder;
+    if (delta_f >= ((float)max_step_delta + 0.5f)) {
+        *remainder = 0.0f;
+        return max_step_delta;
+    }
+    if (delta_f <= (-(float)max_step_delta - 0.5f)) {
+        *remainder = 0.0f;
+        return -max_step_delta;
+    }
+
+    const int16_t delta = (int16_t)((delta_f >= 0.0f) ? (delta_f + 0.5f) : (delta_f - 0.5f));
+    *remainder = delta_f - (float)delta;
+    return delta;
 }
 
 static bool dongle_get_fresh_chest_packet(int64_t now_us,
@@ -674,6 +709,7 @@ static void dongle_handle_blade_turn(int64_t now_us)
     if (!dongle_blade_pressed_fresh(now_us)) {
         s_dongle_last_blade_turn_us = 0;
         s_dongle_blade_turn_dx_remainder = 0.0f;
+        s_dongle_blade_turn_dy_remainder = 0.0f;
         return;
     }
 
@@ -690,6 +726,7 @@ static void dongle_handle_blade_turn(int64_t now_us)
     if (!dongle_get_fresh_chest_packet(now_us, &chest_packet, &chest_age_ms)) {
         s_dongle_last_blade_turn_us = 0;
         s_dongle_blade_turn_dx_remainder = 0.0f;
+        s_dongle_blade_turn_dy_remainder = 0.0f;
         return;
     }
 
@@ -703,27 +740,30 @@ static void dongle_handle_blade_turn(int64_t now_us)
         return;
     }
 
-    float gyro_dps = dongle_blade_turn_gyro_dps(chest_packet) * DONGLE_BLADE_TURN_GYRO_SIGN;
-    if (gyro_dps > -DONGLE_BLADE_TURN_DEADZONE_DPS &&
-        gyro_dps < DONGLE_BLADE_TURN_DEADZONE_DPS) {
-        gyro_dps = 0.0f;
-    }
-
     const float dt_s = (float)elapsed_us / 1000000.0f;
-    float dx_f = (gyro_dps * dt_s * DONGLE_BLADE_TURN_SENSITIVITY) +
-                 s_dongle_blade_turn_dx_remainder;
-    int16_t dx = (int16_t)((dx_f >= 0.0f) ? (dx_f + 0.5f) : (dx_f - 0.5f));
-    bool dx_saturated = false;
-    if (dx > DONGLE_BLADE_TURN_MAX_STEP_DELTA) {
-        dx = DONGLE_BLADE_TURN_MAX_STEP_DELTA;
-        dx_saturated = true;
-    } else if (dx < -DONGLE_BLADE_TURN_MAX_STEP_DELTA) {
-        dx = -DONGLE_BLADE_TURN_MAX_STEP_DELTA;
-        dx_saturated = true;
-    }
-    s_dongle_blade_turn_dx_remainder = dx_saturated ? 0.0f : (dx_f - (float)dx);
+    const float turn_gyro_dps = dongle_blade_apply_gyro_deadzone(
+        dongle_blade_gyro_axis_dps(chest_packet, DONGLE_BLADE_TURN_GYRO_AXIS) *
+            DONGLE_BLADE_TURN_GYRO_SIGN,
+        DONGLE_BLADE_TURN_DEADZONE_DPS);
+    const float pitch_gyro_dps = dongle_blade_apply_gyro_deadzone(
+        dongle_blade_gyro_axis_dps(chest_packet, DONGLE_BLADE_PITCH_GYRO_AXIS) *
+            DONGLE_BLADE_PITCH_GYRO_SIGN,
+        DONGLE_BLADE_PITCH_DEADZONE_DPS);
 
-    if (dx == 0) {
+    const int16_t dx = dongle_blade_integrate_mouse_delta(
+        turn_gyro_dps,
+        dt_s,
+        DONGLE_BLADE_TURN_SENSITIVITY,
+        DONGLE_BLADE_TURN_MAX_STEP_DELTA,
+        &s_dongle_blade_turn_dx_remainder);
+    const int16_t dy = dongle_blade_integrate_mouse_delta(
+        pitch_gyro_dps,
+        dt_s,
+        DONGLE_BLADE_PITCH_SENSITIVITY,
+        DONGLE_BLADE_PITCH_MAX_STEP_DELTA,
+        &s_dongle_blade_turn_dy_remainder);
+
+    if (dx == 0 && dy == 0) {
         s_dongle_last_blade_turn_us = now_us;
         return;
     }
@@ -732,19 +772,23 @@ static void dongle_handle_blade_turn(int64_t now_us)
     if (!usb_mouse_is_ready()) {
         return;
     }
-    err = usb_mouse_move((int8_t)dx, 0, 0, 0);
+    err = usb_mouse_move((int8_t)dx, (int8_t)dy, 0, 0);
     if (err == ESP_OK) {
         s_dongle_last_blade_turn_us = now_us;
     }
 
 #if DONGLE_ENABLE_HID_EVENT_LOG
-    printf("# blade-hid: pressed=1 chest_node=%u axis=%d gyro_dps=%.1f"
-           " chest_age_ms=%.1f dx=%d result=%s\n",
+    printf("# blade-hid: pressed=1 chest_node=%u turn_axis=%d turn_dps=%.1f"
+           " pitch_axis=%d pitch_dps=%.1f chest_age_ms=%.1f"
+           " dx=%d dy=%d result=%s\n",
            (unsigned)DONGLE_BLADE_TURN_CHEST_NODE_ID,
            DONGLE_BLADE_TURN_GYRO_AXIS,
-           (double)gyro_dps,
+           (double)turn_gyro_dps,
+           DONGLE_BLADE_PITCH_GYRO_AXIS,
+           (double)pitch_gyro_dps,
            chest_age_ms,
            dx,
+           dy,
            esp_err_to_name(err));
 #endif
 #endif
@@ -1021,9 +1065,9 @@ static const dongle_key_action_t s_default_class_key_actions[DONGLE_NUM_CLASSES]
     [3] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* idle */
     [4] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 1000, 0 },  /* jump -> SPACE */
     [5] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_E, TRIGGER_COOLDOWN, 1000, 0 },  /* kick -> E */
-    [6] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* left_hand_raise: view turn is handled by Blade + chest gyro */
+    [6] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_M, TRIGGER_EDGE, 800, 0 },        /* left_hand_raise -> M */
     [7] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* move_noise */
-    [8] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* right_hand_raise: view turn is handled by Blade + chest gyro */
+    [8] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_X, TRIGGER_EDGE, 800, 0 },        /* right_hand_raise -> X */
     [9] = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_REPEAT, DONGLE_SLASH_CLICK_INTERVAL_MS, 1 }, /* right_hand_slash -> left click every 500ms */
     [10] = { ACTION_TYPE_KEY_HOLD, USB_KEYBOARD_MOD_LEFT_SHIFT, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 }, /* run -> Shift+W */
     [11] = { ACTION_TYPE_MOUSE_TURN_LEFT, 0, 0, TRIGGER_REPEAT, DONGLE_VIEW_ACTION_INTERVAL_MS, 1 }, /* turn_left -> mouse left */
@@ -1729,14 +1773,74 @@ static bool dongle_action_sustain_fire_frame(uint8_t class_idx, const dongle_key
     return s_dongle_sustain_count[class_idx] == required_frames;
 }
 
-static void dongle_fire_action(uint8_t class_idx, const dongle_key_action_t *action, int64_t now_us)
+static int8_t dongle_jump_movement_class(int64_t now_us)
+{
+    if (s_dongle_keyboard_hold_class >= 0 &&
+        dongle_is_movement_hold_class((uint8_t)s_dongle_keyboard_hold_class)) {
+        return s_dongle_keyboard_hold_class;
+    }
+
+    if (s_dongle_resume_state_class >= 0 &&
+        now_us <= s_dongle_resume_state_until_us &&
+        dongle_is_movement_hold_class((uint8_t)s_dongle_resume_state_class)) {
+        return s_dongle_resume_state_class;
+    }
+
+    return -1;
+}
+
+static esp_err_t dongle_tap_key_with_movement(uint8_t movement_class,
+                                               const dongle_key_action_t *tap_action)
+{
+    const dongle_key_action_t *movement_action = &s_dongle_key_actions[movement_class];
+    const uint8_t modifier = movement_action->modifier | tap_action->modifier;
+    const uint8_t keycodes[6] = {
+        movement_action->keycode,
+        tap_action->keycode,
+        0, 0, 0, 0,
+    };
+
+    esp_err_t err = usb_keyboard_press_keys(modifier, keycodes);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(DONGLE_KEY_TAP_HOLD_MS));
+
+    const uint8_t movement_keys[6] = { movement_action->keycode, 0, 0, 0, 0, 0 };
+    err = usb_keyboard_press_keys(movement_action->modifier, movement_keys);
+    if (err == ESP_OK) {
+        s_dongle_keyboard_hold_class = (int8_t)movement_class;
+    } else {
+        /* Force the normal HOLD path to retry the movement report next frame. */
+        s_dongle_keyboard_hold_class = -1;
+    }
+    return err;
+}
+
+static void dongle_fire_action(uint8_t class_idx,
+                               const dongle_key_action_t *action,
+                               int64_t now_us,
+                               int8_t jump_movement_class)
 {
     if (action->type == ACTION_TYPE_KEY_TAP) {
         esp_err_t err = ESP_OK;
 #if DONGLE_ENABLE_USB_KEYBOARD
-        err = usb_keyboard_tap_key(action->modifier, action->keycode, DONGLE_KEY_TAP_HOLD_MS);
+        if (class_idx == DONGLE_JUMP_CLASS && jump_movement_class >= 0) {
+            err = dongle_tap_key_with_movement((uint8_t)jump_movement_class, action);
+        } else {
+            err = usb_keyboard_tap_key(action->modifier, action->keycode, DONGLE_KEY_TAP_HOLD_MS);
+        }
 #endif
-        dongle_log_key_event(class_idx, "key_tap", action->modifier, action->keycode, err);
+        const uint8_t logged_modifier =
+            (class_idx == DONGLE_JUMP_CLASS && jump_movement_class >= 0) ?
+            (uint8_t)(s_dongle_key_actions[jump_movement_class].modifier | action->modifier) :
+            action->modifier;
+        dongle_log_key_event(class_idx,
+                             jump_movement_class >= 0 ? "key_tap_with_movement" : "key_tap",
+                             logged_modifier,
+                             action->keycode,
+                             err);
     } else if (action->type == ACTION_TYPE_CHARACTER_CYCLE) {
         static const uint8_t character_keys[] = {HID_KEY_1, HID_KEY_2, HID_KEY_3, HID_KEY_4};
         const uint8_t keycode = character_keys[s_dongle_character_slot];
@@ -1843,6 +1947,10 @@ static void dongle_send_key_action(uint8_t infer_class, float infer_confidence, 
         dongle_try_keep_movement_after_blade(&class_idx, now_us);
 
     const dongle_key_action_t *action = &s_dongle_key_actions[class_idx];
+    const int8_t jump_movement_class =
+        (class_idx == DONGLE_JUMP_CLASS && action->type == ACTION_TYPE_KEY_TAP) ?
+        dongle_jump_movement_class(now_us) :
+        -1;
 
     /* Update sustain counters: increment for current class, reset others */
     for (uint8_t i = 0; i < DONGLE_NUM_CLASSES; i++) {
@@ -1933,7 +2041,13 @@ static void dongle_send_key_action(uint8_t infer_class, float infer_confidence, 
         dongle_release_timed_mouse_hold(true, now_us);
     } else {
         /* Release held actions before tap/move actions */
-        dongle_release_hold_actions();
+        if (jump_movement_class >= 0) {
+            /* Keep W (and Shift while running) in the same HID report as jump. */
+            dongle_release_mouse_hold();
+            dongle_release_timed_mouse_hold(true, now_us);
+        } else {
+            dongle_release_hold_actions();
+        }
     }
 
     /* Handle tap-like actions based on trigger mode */
@@ -1987,7 +2101,7 @@ static void dongle_send_key_action(uint8_t infer_class, float infer_confidence, 
     }
 
     if (should_fire) {
-        dongle_fire_action(class_idx, action, now_us);
+        dongle_fire_action(class_idx, action, now_us, jump_movement_class);
         s_dongle_last_fire_us[class_idx] = now_us;
         if (dongle_is_turn_class(class_idx)) {
             s_dongle_last_turn_fire_class = (int8_t)class_idx;
