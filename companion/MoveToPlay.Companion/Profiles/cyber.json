@@ -1,0 +1,25 @@
+{
+  "id": "cyber",
+  "sortOrder": 800,
+  "displayName": "科幻竞技 · 能量 HUD",
+  "subtitle": "MOTION CORE ONLINE",
+  "processNames": [],
+  "accent": "#5EEBFF",
+  "accentSecondary": "#FF72D2",
+  "panelBackground": "#E70A1020",
+  "textPrimary": "#FFF2FCFF",
+  "textMuted": "#FF88A6BA",
+  "overlayPosition": "TopRight",
+  "hudFontFamily": "Consolas",
+  "statusText": "CORE ONLINE",
+  "actionLabel": "动作指令",
+  "goalLabel": "今日能量目标",
+  "markerGlyph": "◆",
+  "squareProgress": true,
+  "idleMessage": "运动回路稳定 · 等待下一指令",
+  "encouragements": [
+    "能量核心升温，维持输出！",
+    "连击同步率优秀！",
+    "运动回路稳定运行"
+  ]
+}

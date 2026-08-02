@@ -1,0 +1,27 @@
+{
+  "id": "gta-v",
+  "sortOrder": 50,
+  "displayName": "GTA V · 城市运动",
+  "subtitle": "MOVE THROUGH THE CITY",
+  "processNames": ["GTA5", "GTA5_Enhanced"],
+  "windowMatchRules": [],
+  "accent": "#72E58D",
+  "accentSecondary": "#FF8E72",
+  "panelBackground": "#00000000",
+  "textPrimary": "#FFF5FAF7",
+  "textMuted": "#FFB8C9C0",
+  "overlayPosition": "TopLeft",
+  "hudFontFamily": "Consolas",
+  "statusText": "CITY RUNNING",
+  "actionLabel": "当前动作",
+  "goalLabel": "城市运动进度",
+  "markerGlyph": "▰",
+  "squareProgress": true,
+  "idleMessage": "路线清晰 · 保持稳定节奏",
+  "encouragements": [
+    "路线很长，节奏正好",
+    "保持专注，下一段继续推进",
+    "动作流畅，城市挑战完成一段",
+    "心率稳定，继续巡航"
+  ]
+}

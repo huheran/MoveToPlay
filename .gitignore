@@ -14,6 +14,12 @@ CMakeFiles/
 cmake_install.cmake
 compile_commands.json
 
+# .NET Companion 构建与本地预览
+companion/**/bin/
+companion/**/obj/
+companion/**/preview*.png
+companion/**/companion-error.log
+
 # 临时文件
 *.log
 *.tmp

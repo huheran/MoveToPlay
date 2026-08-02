@@ -1,0 +1,159 @@
+<Window x:Class="MoveToPlay.Companion.OverlayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:MoveToPlay.Companion.Controls"
+        Title="MoveToPlay Overlay"
+        AllowsTransparency="True"
+        Background="Transparent"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        ShowActivated="False"
+        ShowInTaskbar="False"
+        Topmost="True"
+        Focusable="False">
+    <Window.Resources>
+        <Style TargetType="ProgressBar">
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ProgressBar">
+                        <Grid>
+                            <Border Background="{TemplateBinding Background}" CornerRadius="{Binding ProgressCornerRadius}" />
+                            <Border x:Name="PART_Indicator" HorizontalAlignment="Left"
+                                    Background="{TemplateBinding Foreground}" CornerRadius="{Binding ProgressCornerRadius}" />
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+    <!-- The HWND, HUD gaps and text backgrounds are all fully transparent. -->
+    <Grid x:Name="OverlayRoot" Background="Transparent" IsHitTestVisible="False">
+        <Border x:Name="OverlayCard"
+                Width="370"
+                Margin="38"
+                Padding="0"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Background="Transparent"
+                BorderThickness="0">
+            <StackPanel>
+                <StackPanel.Effect>
+                    <DropShadowEffect BlurRadius="6" Direction="0" Opacity="0.82" ShadowDepth="0" Color="#FF000000" />
+                </StackPanel.Effect>
+
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <controls:OutlinedText FontFamily="{Binding HudFontFamily}" FontSize="11" FontWeight="Bold"
+                                               Foreground="{Binding AccentBrush}" Stroke="#EE000000" StrokeThickness="1.25"
+                                               Text="{Binding ProfileSubtitle}" />
+                        <controls:OutlinedText Margin="0,1,0,0" FontFamily="{Binding HudFontFamily}" FontSize="16" FontWeight="Bold"
+                                               Foreground="{Binding PrimaryTextBrush}" Stroke="#F5000000" StrokeThickness="1.45"
+                                               Text="{Binding ProfileName}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Orientation="Horizontal">
+                        <Ellipse Width="7" Height="7" Margin="0,0,6,0" Fill="#FF6EE7B7" />
+                        <controls:OutlinedText FontFamily="Consolas" FontSize="10" FontWeight="Bold" Foreground="#FF9FF7CC"
+                                               Stroke="#EE000000" StrokeThickness="1.15" Text="{Binding StatusText}" />
+                    </StackPanel>
+                </Grid>
+
+                <Grid Margin="0,18,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock FontFamily="{Binding HudFontFamily}" FontSize="11" FontWeight="SemiBold"
+                                   Foreground="{Binding MutedTextBrush}" Text="{Binding ActionLabel}" />
+                        <controls:OutlinedText Margin="0,0,0,0" FontFamily="{Binding HudFontFamily}" FontSize="36" FontWeight="Black"
+                                               Foreground="{Binding PrimaryTextBrush}" Stroke="#FF000000" StrokeThickness="2.15"
+                                               Text="{Binding ActionName}" />
+                        <controls:OutlinedText Margin="0,0,0,0" FontFamily="Consolas" FontSize="12" FontWeight="Bold"
+                                               Foreground="{Binding AccentSecondaryBrush}" Stroke="#F5000000" StrokeThickness="1.3"
+                                               Text="{Binding ActionHint}" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="1" Margin="0,8,6,0" VerticalAlignment="Center" FontSize="34"
+                               FontFamily="{Binding HudFontFamily}" Foreground="{Binding AccentBrush}" Text="{Binding MarkerGlyph}" />
+                </Grid>
+
+                <Grid Margin="0,18,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock FontFamily="{Binding HudFontFamily}" FontSize="10" FontWeight="SemiBold"
+                                   Foreground="{Binding MutedTextBrush}" Text="心率" />
+                        <StackPanel Margin="0,3,0,0" Orientation="Horizontal">
+                            <controls:OutlinedText FontFamily="{Binding HudFontFamily}" FontSize="23" FontWeight="Black"
+                                                   Foreground="{Binding PrimaryTextBrush}" Stroke="#FF000000" StrokeThickness="1.65"
+                                                   Text="{Binding HeartRate}" />
+                            <TextBlock Margin="4,8,0,0" FontFamily="Consolas" FontSize="9" Foreground="{Binding MutedTextBrush}" Text="BPM" />
+                        </StackPanel>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock FontFamily="{Binding HudFontFamily}" FontSize="10" FontWeight="SemiBold"
+                                   Foreground="{Binding MutedTextBrush}" Text="消耗" />
+                        <StackPanel Margin="0,3,0,0" Orientation="Horizontal">
+                            <controls:OutlinedText FontFamily="{Binding HudFontFamily}" FontSize="23" FontWeight="Black"
+                                                   Foreground="{Binding PrimaryTextBrush}" Stroke="#FF000000" StrokeThickness="1.65"
+                                                   Text="{Binding Calories}" />
+                            <TextBlock Margin="4,8,0,0" FontFamily="Consolas" FontSize="9" Foreground="{Binding MutedTextBrush}" Text="KCAL" />
+                        </StackPanel>
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                        <TextBlock FontFamily="{Binding HudFontFamily}" FontSize="10" FontWeight="SemiBold"
+                                   Foreground="{Binding MutedTextBrush}" Text="运动" />
+                        <controls:OutlinedText Margin="0,2,0,0" FontFamily="{Binding HudFontFamily}" FontSize="23" FontWeight="Black"
+                                               Foreground="{Binding PrimaryTextBrush}" Stroke="#FF000000" StrokeThickness="1.65"
+                                               Text="{Binding ActiveTime}" />
+                    </StackPanel>
+                </Grid>
+
+                <StackPanel Margin="0,17,4,0">
+                    <Grid>
+                        <TextBlock FontFamily="{Binding HudFontFamily}" FontSize="10" FontWeight="SemiBold"
+                                   Foreground="{Binding MutedTextBrush}" Text="{Binding GoalLabel}" />
+                        <TextBlock HorizontalAlignment="Right" FontFamily="Consolas" FontSize="10" FontWeight="Bold"
+                                   Foreground="{Binding AccentBrush}" Text="{Binding GoalProgress, StringFormat={}{0}%}" />
+                    </Grid>
+                    <ProgressBar Height="{Binding ProgressHeight}" Margin="0,7,0,0" Maximum="100" Value="{Binding GoalProgress, Mode=OneWay}"
+                                 Foreground="{Binding AccentBrush}" Background="#55FFFFFF" BorderThickness="0" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Border x:Name="EncouragementToast"
+                MaxWidth="720"
+                Margin="0,72,0,0"
+                Padding="0"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Top"
+                Background="Transparent"
+                BorderThickness="0"
+                Opacity="0">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="7" Direction="0" Opacity="0.88" ShadowDepth="0" Color="#FF000000" />
+            </Border.Effect>
+            <Border.RenderTransform>
+                <TranslateTransform Y="-18" />
+            </Border.RenderTransform>
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Margin="0,0,10,0" FontFamily="{Binding HudFontFamily}" FontSize="19"
+                           Foreground="{Binding AccentBrush}" Text="{Binding MarkerGlyph}" />
+                <controls:OutlinedText FontFamily="{Binding HudFontFamily}" FontSize="18" FontWeight="Black"
+                                       Foreground="{Binding PrimaryTextBrush}" Stroke="#FF000000" StrokeThickness="1.7"
+                                       Text="{Binding Encouragement}" />
+                <controls:OutlinedText Margin="16,1,0,0" FontFamily="Consolas" FontSize="12" FontWeight="Bold"
+                                       Foreground="{Binding AccentSecondaryBrush}" Stroke="#F5000000" StrokeThickness="1.25"
+                                       Text="{Binding Combo, StringFormat={}COMBO ×{0}}" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

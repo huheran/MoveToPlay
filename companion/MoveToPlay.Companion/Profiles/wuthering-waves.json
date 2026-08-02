@@ -1,0 +1,32 @@
+{
+  "id": "wuthering-waves",
+  "sortOrder": 20,
+  "displayName": "鸣潮 · 共鸣训练",
+  "subtitle": "RESONANCE IN MOTION",
+  "processNames": ["Wuthering Waves", "WutheringWaves"],
+  "windowMatchRules": [
+    {
+      "processNames": ["Client-Win64-Shipping"],
+      "titleKeywords": ["Wuthering Waves", "鸣潮"]
+    }
+  ],
+  "accent": "#5FE7D0",
+  "accentSecondary": "#FFD27A",
+  "panelBackground": "#00000000",
+  "textPrimary": "#FFF7FEFC",
+  "textMuted": "#FFB8CFCC",
+  "overlayPosition": "TopRight",
+  "hudFontFamily": "Microsoft YaHei UI",
+  "statusText": "RESONANCE READY",
+  "actionLabel": "当前共鸣动作",
+  "goalLabel": "今日共鸣进度",
+  "markerGlyph": "◇",
+  "squareProgress": false,
+  "idleMessage": "共鸣稳定 · 动作识别在线",
+  "encouragements": [
+    "共鸣稳定，继续保持节奏！",
+    "这组动作很流畅，再向前一点",
+    "能量正在积累，完成下一轮",
+    "保持呼吸，让动作跟上节拍"
+  ]
+}
