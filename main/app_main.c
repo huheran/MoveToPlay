@@ -19,6 +19,7 @@
 #include "nvs.h"
 
 #include "imu_lsm6dsv.h"
+#include "max30102.h"
 #include "m2p_espnow.h"
 #include "rf_infer.h"
 #include "rf_state_infer.h"
@@ -55,7 +56,7 @@ static const char *TAG = "imu_main";
  * M2P_DONGLE_MODE:   0=view, 1=collect, 2=play
  * *_BOARD_STYLE:     0=current, 1=new
  */
-#define M2P_BOARD_PROFILE             1
+#define M2P_BOARD_PROFILE             2
 #define M2P_DONGLE_MODE               2
 
 #define M2P_CHEST_BOARD_STYLE         1
@@ -206,6 +207,14 @@ static const char *TAG = "imu_main";
 #define BLADE_SLEEP_SEQUENCE_GAP_MS    700
 #define BLADE_SLEEP_HOLD_MS           5000
 #define BLADE_WAKE_CONFIRM_HOLD_MS    3000
+
+/* Heart-rate connector on the Blade: ESP32 side of the PCA9306 is 3.3 V. */
+#define BLADE_HEART_RATE_SDA_GPIO     GPIO_NUM_6
+#define BLADE_HEART_RATE_SCL_GPIO     GPIO_NUM_5
+#define BLADE_HEART_RATE_INT_GPIO     GPIO_NUM_7
+#define BLADE_HEART_RATE_POLL_MS      20
+#define BLADE_HEART_RATE_SERIAL_MS    1000
+#define BLADE_HEART_RATE_FINGER_MIN_IR 10000U
 
 #define BATTERY_REPORT_INTERVAL_MS    5000
 
@@ -3373,6 +3382,7 @@ static void blade_enter_deep_sleep(const char *reason)
            BLADE_BUTTON_GPIO);
 
     status_led_off();
+    (void)max30102_shutdown();
     (void)blade_button_init();
 
     esp_err_t wake_err = blade_enable_deep_sleep_wakeup();
@@ -3383,6 +3393,128 @@ static void blade_enter_deep_sleep(const char *reason)
 
     vTaskDelay(pdMS_TO_TICKS(50));
     esp_deep_sleep_start();
+}
+
+typedef struct {
+    float dc;
+    float envelope;
+    float bpm;
+    int64_t last_beat_us;
+    int64_t last_sample_us;
+    uint32_t sample_count;
+    uint32_t beat_count;
+    bool finger_present;
+    bool peak_armed;
+} blade_heart_rate_state_t;
+
+static void blade_heart_rate_reset(blade_heart_rate_state_t *state)
+{
+    memset(state, 0, sizeof(*state));
+    state->peak_armed = true;
+}
+
+static void blade_heart_rate_process_sample(blade_heart_rate_state_t *state,
+                                            const max30102_sample_t *sample,
+                                            int64_t now_us)
+{
+    const bool finger_present = sample->ir >= BLADE_HEART_RATE_FINGER_MIN_IR;
+    if (!finger_present) {
+        if (state->finger_present) {
+            ESP_LOGI(TAG, "heart-rate: finger removed");
+        }
+        blade_heart_rate_reset(state);
+        state->last_sample_us = now_us;
+        return;
+    }
+
+    if (!state->finger_present) {
+        ESP_LOGI(TAG, "heart-rate: finger detected");
+        blade_heart_rate_reset(state);
+        state->finger_present = true;
+        state->dc = (float)sample->ir;
+    }
+
+    state->finger_present = true;
+    state->sample_count++;
+    state->dc += ((float)sample->ir - state->dc) * 0.03f;
+    const float ac = (float)sample->ir - state->dc;
+    const float abs_ac = (ac < 0.0f) ? -ac : ac;
+    state->envelope += (abs_ac - state->envelope) * 0.10f;
+
+    /* MAX30102 samples are averaged in the sensor; this is intentionally a
+     * conservative adaptive threshold to reject motion and DC drift. */
+    const float threshold = (state->envelope * 0.45f > 120.0f) ?
+        state->envelope * 0.45f : 120.0f;
+    const bool local_maximum = state->peak_armed && ac > threshold;
+    const int64_t since_last_beat =
+        (state->last_beat_us > 0) ? now_us - state->last_beat_us : INT64_MAX;
+
+    if (local_maximum && since_last_beat >= 300000) {
+        /* Use a short refractory period and the adaptive envelope so the
+         * dicrotic notch is not reported as a second beat. */
+        if (state->last_beat_us > 0 && since_last_beat <= 1500000) {
+            const float instant_bpm = 60000000.0f / (float)since_last_beat;
+            if (instant_bpm >= 40.0f && instant_bpm <= 200.0f) {
+                state->bpm = (state->bpm <= 0.0f) ? instant_bpm :
+                            state->bpm * 0.75f + instant_bpm * 0.25f;
+                state->beat_count++;
+            }
+        }
+        state->last_beat_us = now_us;
+        state->peak_armed = false;
+    }
+    if (ac < threshold * 0.25f) {
+        state->peak_armed = true;
+    }
+    if (state->last_beat_us > 0 && now_us - state->last_beat_us > 3000000) {
+        state->bpm = 0.0f;
+    }
+    state->last_sample_us = now_us;
+}
+
+static void blade_heart_rate_task(void *arg)
+{
+    (void)arg;
+    blade_heart_rate_state_t state;
+    blade_heart_rate_reset(&state);
+    max30102_sample_t last_sample = {0};
+    int64_t last_serial_us = 0;
+    int64_t last_error_us = 0;
+
+    printf("# heart-rate: sensor=MAX30102 address=0x57 SDA=%d SCL=%d INT=%d\n",
+           BLADE_HEART_RATE_SDA_GPIO,
+           BLADE_HEART_RATE_SCL_GPIO,
+           BLADE_HEART_RATE_INT_GPIO);
+    printf("heart_rate_ms,bpm,finger_present,ir,red\n");
+
+    while (1) {
+        esp_err_t read_err = ESP_OK;
+        while (read_err == ESP_OK) {
+            max30102_sample_t sample = {0};
+            read_err = max30102_read_sample(&sample);
+            if (read_err == ESP_OK) {
+                last_sample = sample;
+                blade_heart_rate_process_sample(&state, &sample, esp_timer_get_time());
+            }
+        }
+
+        const int64_t now_us = esp_timer_get_time();
+        if (now_us - last_serial_us >= (int64_t)BLADE_HEART_RATE_SERIAL_MS * 1000LL) {
+            printf("%" PRId64 ",%.1f,%d,%" PRIu32 ",%" PRIu32 "\n",
+                   (int64_t)(now_us / 1000LL),
+                   state.finger_present ? (double)state.bpm : 0.0,
+                   state.finger_present ? 1 : 0,
+                   last_sample.ir,
+                   last_sample.red);
+            last_serial_us = now_us;
+        }
+
+        if (read_err != ESP_ERR_NOT_FOUND && now_us - last_error_us >= 1000000) {
+            ESP_LOGW(TAG, "MAX30102 FIFO read failed: %s", esp_err_to_name(read_err));
+            last_error_us = now_us;
+        }
+        vTaskDelay(pdMS_TO_TICKS(BLADE_HEART_RATE_POLL_MS));
+    }
 }
 
 static bool blade_woke_from_button_sleep(void)
@@ -3774,11 +3906,27 @@ static void start_blade_mode(void)
     esp_err_t espnow_err = m2p_espnow_init(M2P_ESPNOW_ROLE_BLADE, M2P_ESPNOW_CHANNEL);
     if (espnow_err != ESP_OK) {
         ESP_LOGW(TAG, "ESP-NOW init failed: %s", esp_err_to_name(espnow_err));
-        return;
     }
 #else
     ESP_LOGI(TAG, "ESP-NOW disabled by MOVE_TO_PLAY_ENABLE_ESPNOW");
 #endif
+
+    esp_err_t heart_rate_err = max30102_init(BLADE_HEART_RATE_SDA_GPIO,
+                                             BLADE_HEART_RATE_SCL_GPIO,
+                                             BLADE_HEART_RATE_INT_GPIO);
+    if (heart_rate_err == ESP_OK) {
+        xTaskCreatePinnedToCore(blade_heart_rate_task,
+                                "blade_heart_rate",
+                                4096,
+                                NULL,
+                                5,
+                                NULL,
+                                tskNO_AFFINITY);
+    } else {
+        ESP_LOGW(TAG,
+                 "Blade heart-rate sensor disabled: %s (check MAX30102 power and I2C wiring)",
+                 esp_err_to_name(heart_rate_err));
+    }
 
     xTaskCreatePinnedToCore(blade_report_task,
                             "blade_report_task",
