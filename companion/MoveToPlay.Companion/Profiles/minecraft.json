@@ -1,0 +1,32 @@
+{
+  "id": "minecraft",
+  "sortOrder": 30,
+  "displayName": "我的世界 · 方块远征",
+  "subtitle": "BUILD · MOVE · EXPLORE",
+  "processNames": ["Minecraft.Windows", "Minecraft"],
+  "windowMatchRules": [
+    {
+      "processNames": ["javaw", "java"],
+      "titleKeywords": ["Minecraft"]
+    }
+  ],
+  "accent": "#79D85A",
+  "accentSecondary": "#F4C85B",
+  "panelBackground": "#00000000",
+  "textPrimary": "#FFF8F7ED",
+  "textMuted": "#FFC5CEB7",
+  "overlayPosition": "TopLeft",
+  "hudFontFamily": "Consolas",
+  "statusText": "WORLD ACTIVE",
+  "actionLabel": "当前操作",
+  "goalLabel": "今日经验进度",
+  "markerGlyph": "◆",
+  "squareProgress": true,
+  "idleMessage": "世界已载入 · 动作识别在线",
+  "encouragements": [
+    "稳稳向前，又完成一格！",
+    "今天的体力建筑正在成形",
+    "动作连续，继续探索下一段",
+    "补充水分，再完成一小组"
+  ]
+}

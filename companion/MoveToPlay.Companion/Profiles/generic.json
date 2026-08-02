@@ -1,0 +1,25 @@
+{
+  "id": "generic",
+  "sortOrder": 900,
+  "displayName": "通用 · 轻量运动",
+  "subtitle": "MOVE TO PLAY",
+  "processNames": [],
+  "accent": "#6EE7B7",
+  "accentSecondary": "#67E8F9",
+  "panelBackground": "#E6101724",
+  "textPrimary": "#FFF8FAFC",
+  "textMuted": "#FF94A3B8",
+  "overlayPosition": "TopLeft",
+  "hudFontFamily": "Microsoft YaHei UI",
+  "statusText": "ONLINE",
+  "actionLabel": "当前动作",
+  "goalLabel": "今日运动目标",
+  "markerGlyph": "✦",
+  "squareProgress": false,
+  "idleMessage": "身体在线 · 动作识别稳定",
+  "encouragements": [
+    "保持节奏，继续前进！",
+    "动作很稳定，做得漂亮！",
+    "距离今日目标又近了一步"
+  ]
+}

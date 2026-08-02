@@ -1,0 +1,27 @@
+{
+  "id": "elden-ring",
+  "sortOrder": 40,
+  "displayName": "艾尔登法环 · 交界地锻炼",
+  "subtitle": "RISE · MOVE · ENDURE",
+  "processNames": ["eldenring"],
+  "windowMatchRules": [],
+  "accent": "#D9BD72",
+  "accentSecondary": "#D9765E",
+  "panelBackground": "#00000000",
+  "textPrimary": "#FFF5F0E4",
+  "textMuted": "#FFC8BDA5",
+  "overlayPosition": "TopRight",
+  "hudFontFamily": "Microsoft YaHei UI",
+  "statusText": "GRACE ACTIVE",
+  "actionLabel": "当前锻炼动作",
+  "goalLabel": "今日耐力目标",
+  "markerGlyph": "✦",
+  "squareProgress": false,
+  "idleMessage": "呼吸稳定 · 耐力正在恢复",
+  "encouragements": [
+    "稳住呼吸，下一次动作更从容",
+    "耐力恢复，继续前进",
+    "这一轮坚持住了，做得漂亮",
+    "胜利来自每一个稳定动作"
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "id": "cyberpunk-2077",
+  "sortOrder": 60,
+  "displayName": "赛博朋克 2077 · 夜城训练",
+  "subtitle": "NEURAL MOTION LINK",
+  "processNames": ["Cyberpunk2077"],
+  "windowMatchRules": [],
+  "accent": "#F4F43C",
+  "accentSecondary": "#39E7E1",
+  "panelBackground": "#00000000",
+  "textPrimary": "#FFFFFFEC",
+  "textMuted": "#FFC7C89D",
+  "overlayPosition": "TopRight",
+  "hudFontFamily": "Consolas",
+  "statusText": "LINK STABLE",
+  "actionLabel": "动作协议",
+  "goalLabel": "今日体能协议",
+  "markerGlyph": "▰",
+  "squareProgress": true,
+  "idleMessage": "神经连接稳定 · 动作数据同步中",
+  "encouragements": [
+    "动作协议同步，继续输出",
+    "节奏稳定，完成下一段训练",
+    "体能数据上升，保持连接",
+    "漂亮的连续动作，再来一组"
+  ]
+}

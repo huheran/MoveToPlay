@@ -1,0 +1,26 @@
+{
+  "id": "genshin",
+  "sortOrder": 10,
+  "isDefault": true,
+  "displayName": "原神 · 提瓦特旅途",
+  "subtitle": "ADVENTURE FITNESS",
+  "processNames": ["YuanShen", "GenshinImpact", "GenshinImpactCloudGame"],
+  "accent": "#F4D38A",
+  "accentSecondary": "#82D9F7",
+  "panelBackground": "#E6191C29",
+  "textPrimary": "#FFF9F5E9",
+  "textMuted": "#FFB8B2A5",
+  "overlayPosition": "TopRight",
+  "hudFontFamily": "Microsoft YaHei UI",
+  "statusText": "ADVENTURE READY",
+  "actionLabel": "当前动作",
+  "goalLabel": "今日冒险目标",
+  "markerGlyph": "✦",
+  "squareProgress": false,
+  "idleMessage": "旅途状态良好 · 动作识别稳定",
+  "encouragements": [
+    "体力还很充沛，继续探索！",
+    "向下一个传送锚点前进！",
+    "今日委托：再运动五分钟"
+  ]
+}
