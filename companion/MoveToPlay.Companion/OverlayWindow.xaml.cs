@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using MoveToPlay.Companion.Models;
@@ -21,7 +22,6 @@ public partial class OverlayWindow : Window
     private readonly GameWindowService _windowService;
     private readonly DispatcherTimer _positionTimer = new() { Interval = TimeSpan.FromMilliseconds(250) };
     private nint _windowHandle;
-    private GameProfile? _profile;
 
     public OverlayWindow(TelemetryViewModel viewModel, GameWindowService windowService)
     {
@@ -46,15 +46,25 @@ public partial class OverlayWindow : Window
 
     public void ApplyProfile(GameProfile profile)
     {
-        _profile = profile;
-        if (profile.OverlayPosition.Equals("TopLeft", StringComparison.OrdinalIgnoreCase))
+        ApplyPlacement(OverlayPlacement.FromProfile(profile));
+    }
+
+    public void ApplyPlacement(OverlayPlacement placement)
+    {
+        var anchor = OverlayPlacement.NormalizeAnchor(placement.Anchor);
+        OverlayCard.HorizontalAlignment = anchor switch
         {
-            OverlayCard.HorizontalAlignment = HorizontalAlignment.Left;
-        }
-        else
+            "TopLeft" or "CenterLeft" or "BottomLeft" => HorizontalAlignment.Left,
+            "TopCenter" or "Center" or "BottomCenter" => HorizontalAlignment.Center,
+            _ => HorizontalAlignment.Right,
+        };
+        OverlayCard.VerticalAlignment = anchor switch
         {
-            OverlayCard.HorizontalAlignment = HorizontalAlignment.Right;
-        }
+            "CenterLeft" or "Center" or "CenterRight" => VerticalAlignment.Center,
+            "BottomLeft" or "BottomCenter" or "BottomRight" => VerticalAlignment.Bottom,
+            _ => VerticalAlignment.Top,
+        };
+        OverlayCard.RenderTransform = new TranslateTransform(placement.OffsetX, placement.OffsetY);
     }
 
     public void RefreshPosition()

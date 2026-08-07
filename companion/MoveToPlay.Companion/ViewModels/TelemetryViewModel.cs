@@ -10,15 +10,27 @@ public sealed class TelemetryViewModel : INotifyPropertyChanged
 {
     private string _profileName = "原神 · 提瓦特旅途";
     private string _profileSubtitle = "ADVENTURE FITNESS";
-    private string _actionName = "行走";
-    private string _actionHint = "稳定步频";
-    private int _heartRate = 96;
+    private string _actionName = "等待 Dongle";
+    private string _actionHint = "请连接 MoveToPlay 接收器";
+    private string _heartRate = "—";
     private string _calories = "0.0";
     private string _activeTime = "00:00";
     private int _goalProgress;
-    private int _combo = 12;
-    private string _encouragement = "身体在线 · 动作识别稳定";
-    private string _statusText = "ONLINE";
+    private int _combo;
+    private string _encouragement = "正在搜索 MoveToPlay Dongle";
+    private string _statusText = "SEARCHING";
+    private string _sourceLabel = "USB CDC";
+    private string _connectionDetail = "正在搜索 MoveToPlay Dongle";
+    private string _trackerStatus = "0/4";
+    private string _bladeStatus = "OFF";
+    private string _signalQuality = "0%";
+    private string _chestBattery = "—";
+    private string _rightHandBattery = "—";
+    private string _leftHandBattery = "—";
+    private string _legBattery = "—";
+    private string _bladeBattery = "—";
+    private Brush _connectionStatusBrush = BrushFrom("#F4D38A");
+    private string? _sourceStatusText;
     private string _actionLabel = "当前动作";
     private string _goalLabel = "今日运动目标";
     private string _markerGlyph = "✦";
@@ -39,13 +51,24 @@ public sealed class TelemetryViewModel : INotifyPropertyChanged
     public string ProfileSubtitle { get => _profileSubtitle; private set => Set(ref _profileSubtitle, value); }
     public string ActionName { get => _actionName; private set => Set(ref _actionName, value); }
     public string ActionHint { get => _actionHint; private set => Set(ref _actionHint, value); }
-    public int HeartRate { get => _heartRate; private set => Set(ref _heartRate, value); }
+    public string HeartRate { get => _heartRate; private set => Set(ref _heartRate, value); }
     public string Calories { get => _calories; private set => Set(ref _calories, value); }
     public string ActiveTime { get => _activeTime; private set => Set(ref _activeTime, value); }
     public int GoalProgress { get => _goalProgress; private set => Set(ref _goalProgress, value); }
     public int Combo { get => _combo; private set => Set(ref _combo, value); }
     public string Encouragement { get => _encouragement; private set => Set(ref _encouragement, value); }
     public string StatusText { get => _statusText; private set => Set(ref _statusText, value); }
+    public string SourceLabel { get => _sourceLabel; private set => Set(ref _sourceLabel, value); }
+    public string ConnectionDetail { get => _connectionDetail; private set => Set(ref _connectionDetail, value); }
+    public string TrackerStatus { get => _trackerStatus; private set => Set(ref _trackerStatus, value); }
+    public string BladeStatus { get => _bladeStatus; private set => Set(ref _bladeStatus, value); }
+    public string SignalQuality { get => _signalQuality; private set => Set(ref _signalQuality, value); }
+    public string ChestBattery { get => _chestBattery; private set => Set(ref _chestBattery, value); }
+    public string RightHandBattery { get => _rightHandBattery; private set => Set(ref _rightHandBattery, value); }
+    public string LeftHandBattery { get => _leftHandBattery; private set => Set(ref _leftHandBattery, value); }
+    public string LegBattery { get => _legBattery; private set => Set(ref _legBattery, value); }
+    public string BladeBattery { get => _bladeBattery; private set => Set(ref _bladeBattery, value); }
+    public Brush ConnectionStatusBrush { get => _connectionStatusBrush; private set => Set(ref _connectionStatusBrush, value); }
     public string ActionLabel { get => _actionLabel; private set => Set(ref _actionLabel, value); }
     public string GoalLabel { get => _goalLabel; private set => Set(ref _goalLabel, value); }
     public string MarkerGlyph { get => _markerGlyph; private set => Set(ref _markerGlyph, value); }
@@ -62,7 +85,7 @@ public sealed class TelemetryViewModel : INotifyPropertyChanged
     {
         ProfileName = TextOr(profile.DisplayName, "通用运动界面");
         ProfileSubtitle = TextOr(profile.Subtitle, "MOVE TO PLAY");
-        StatusText = TextOr(profile.StatusText, "ONLINE");
+        StatusText = _sourceStatusText ?? TextOr(profile.StatusText, "ONLINE");
         ActionLabel = TextOr(profile.ActionLabel, "当前动作");
         GoalLabel = TextOr(profile.GoalLabel, "今日运动目标");
         MarkerGlyph = TextOr(profile.MarkerGlyph, "✦");
@@ -81,15 +104,49 @@ public sealed class TelemetryViewModel : INotifyPropertyChanged
     {
         ActionName = snapshot.ActionName;
         ActionHint = snapshot.ActionHint;
-        HeartRate = snapshot.HeartRate;
+        HeartRate = snapshot.HeartRate?.ToString() ?? "—";
         Calories = snapshot.Calories.ToString("0.0");
         ActiveTime = snapshot.ActiveTime.ToString(@"mm\:ss");
         GoalProgress = snapshot.GoalProgress;
         Combo = snapshot.Combo;
         Encouragement = snapshot.Encouragement;
+        TrackerStatus = $"{snapshot.TrackerOnline}/4";
+        BladeStatus = snapshot.BladeOnline ? "ON" : "OFF";
+        SignalQuality = $"{snapshot.SignalQuality}%";
+        ChestBattery = FormatBattery(snapshot.Batteries.Chest);
+        RightHandBattery = FormatBattery(snapshot.Batteries.RightHand);
+        LeftHandBattery = FormatBattery(snapshot.Batteries.LeftHand);
+        LegBattery = FormatBattery(snapshot.Batteries.Leg);
+        BladeBattery = FormatBattery(snapshot.Batteries.Blade);
     }
 
     public void SetEncouragement(string message) => Encouragement = message;
+
+    public void SetSourceStatus(TelemetrySourceStatus status)
+    {
+        _sourceStatusText = status.StatusText;
+        StatusText = status.StatusText;
+        SourceLabel = status.StatusText == "DEMO" ? "DEMO SOURCE" : "USB CDC";
+        ConnectionDetail = status.Detail;
+        ConnectionStatusBrush = BrushFrom(status.Connected ? "#6EE7B7" : "#F4D38A");
+        if (!status.Connected)
+        {
+            ActionName = "等待 Dongle";
+            ActionHint = status.Detail;
+            Encouragement = status.Detail;
+            TrackerStatus = "0/4";
+            BladeStatus = "OFF";
+            SignalQuality = "0%";
+            ChestBattery = "—";
+            RightHandBattery = "—";
+            LeftHandBattery = "—";
+            LegBattery = "—";
+            BladeBattery = "—";
+        }
+    }
+
+    private static string FormatBattery(int? battery) =>
+        battery.HasValue ? $"{Math.Clamp(battery.Value, 0, 100)}%" : "—";
 
     public void SetPanelOpacity(double percent)
     {

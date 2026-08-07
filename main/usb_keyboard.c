@@ -1,7 +1,9 @@
 #include "usb_keyboard.h"
 
 #include <stddef.h>
+#include <string.h>
 
+#include "class/cdc/cdc_device.h"
 #include "class/hid/hid_device.h"
 #include "driver/usb_serial_jtag.h"
 #include "esp_check.h"
@@ -9,20 +11,23 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "tinyusb.h"
+#include "tinyusb_cdc_acm.h"
 #include "tinyusb_default_config.h"
 
 static const char *TAG = "usb_keyboard";
 
 #define USB_REPORT_ID_KEYBOARD 1
 #define USB_REPORT_ID_MOUSE    2
-#define USB_KEYBOARD_TOTAL_DESC_LEN (TUD_CONFIG_DESC_LEN + TUD_HID_DESC_LEN)
+#define USB_KEYBOARD_TOTAL_DESC_LEN (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_HID_DESC_LEN)
 #define USB_HID_EP_SIZE 16
 #define USB_HID_EP_INTERVAL_MS 1
 #define USB_HID_SEND_TIMEOUT_MS 100
 #define USB_HID_SEND_RETRY_MS   2
+#define USB_TELEMETRY_MAX_LINE_SIZE 500
 
 static bool s_usb_keyboard_installed = false;
 static bool s_usb_serial_jtag_mode = false;
+static volatile bool s_usb_telemetry_port_open = false;
 static uint8_t s_mouse_buttons = 0;
 
 static const uint8_t s_hid_report_descriptor[] = {
@@ -33,15 +38,40 @@ static const uint8_t s_hid_report_descriptor[] = {
 static const char *s_hid_string_descriptor[] = {
     (const char[]){0x09, 0x04},
     "MoveToPlay",
-    "MoveToPlay HID KM",
-    "000002",
+    "MoveToPlay HID + Telemetry",
+    "000003",
     "HID Keyboard+Mouse",
+    "MoveToPlay Telemetry",
+};
+
+static const tusb_desc_device_t s_composite_device_descriptor = {
+    .bLength = sizeof(tusb_desc_device_t),
+    .bDescriptorType = TUSB_DESC_DEVICE,
+    .bcdUSB = 0x0200,
+    .bDeviceClass = TUSB_CLASS_MISC,
+    .bDeviceSubClass = MISC_SUBCLASS_COMMON,
+    .bDeviceProtocol = MISC_PROTOCOL_IAD,
+    .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
+    .idVendor = TINYUSB_ESPRESSIF_VID,
+    .idProduct = 0x4005,
+    .bcdDevice = 0x0100,
+    .iManufacturer = 0x01,
+    .iProduct = 0x02,
+    .iSerialNumber = 0x03,
+    .bNumConfigurations = 0x01,
 };
 
 static const uint8_t s_hid_configuration_descriptor[] = {
-    TUD_CONFIG_DESCRIPTOR(1, 1, 0, USB_KEYBOARD_TOTAL_DESC_LEN, TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
-    TUD_HID_DESCRIPTOR(0, 4, HID_ITF_PROTOCOL_NONE, sizeof(s_hid_report_descriptor), 0x81, USB_HID_EP_SIZE, USB_HID_EP_INTERVAL_MS),
+    TUD_CONFIG_DESCRIPTOR(1, 3, 0, USB_KEYBOARD_TOTAL_DESC_LEN, TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
+    TUD_CDC_DESCRIPTOR(0, 5, 0x81, 8, 0x02, 0x82, 64),
+    TUD_HID_DESCRIPTOR(2, 4, HID_ITF_PROTOCOL_NONE, sizeof(s_hid_report_descriptor), 0x83, USB_HID_EP_SIZE, USB_HID_EP_INTERVAL_MS),
 };
+
+static void usb_telemetry_line_state_changed(int itf, cdcacm_event_t *event)
+{
+    (void)itf;
+    s_usb_telemetry_port_open = event != NULL && event->line_state_changed_data.dtr;
+}
 
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance)
 {
@@ -85,7 +115,7 @@ esp_err_t usb_keyboard_init(void)
 
     tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG();
 
-    tusb_cfg.descriptor.device = NULL;
+    tusb_cfg.descriptor.device = &s_composite_device_descriptor;
     tusb_cfg.descriptor.full_speed_config = s_hid_configuration_descriptor;
     tusb_cfg.descriptor.string = s_hid_string_descriptor;
     tusb_cfg.descriptor.string_count = sizeof(s_hid_string_descriptor) / sizeof(s_hid_string_descriptor[0]);
@@ -94,12 +124,28 @@ esp_err_t usb_keyboard_init(void)
 #endif
 
     esp_err_t err = tinyusb_driver_install(&tusb_cfg);
-    if (err == ESP_OK) {
-        s_usb_keyboard_installed = true;
-        s_mouse_buttons = 0;
-        ESP_LOGI(TAG, "USB HID keyboard+mouse initialized");
+    if (err != ESP_OK) {
+        return err;
     }
-    return err;
+
+    const tinyusb_config_cdcacm_t cdc_cfg = {
+        .cdc_port = TINYUSB_CDC_ACM_0,
+        .callback_rx = NULL,
+        .callback_rx_wanted_char = NULL,
+        .callback_line_state_changed = usb_telemetry_line_state_changed,
+        .callback_line_coding_changed = NULL,
+    };
+    err = tinyusb_cdcacm_init(&cdc_cfg);
+    if (err != ESP_OK) {
+        (void)tinyusb_driver_uninstall();
+        return err;
+    }
+
+    s_usb_keyboard_installed = true;
+    s_usb_telemetry_port_open = false;
+    s_mouse_buttons = 0;
+    ESP_LOGI(TAG, "USB HID keyboard+mouse and CDC telemetry initialized");
+    return ESP_OK;
 }
 
 esp_err_t usb_keyboard_switch_to_serial_jtag(void)
@@ -134,6 +180,14 @@ esp_err_t usb_keyboard_switch_to_serial_jtag(void)
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 
+    if (tinyusb_cdcacm_initialized(TINYUSB_CDC_ACM_0)) {
+        esp_err_t cdc_err = tinyusb_cdcacm_deinit(TINYUSB_CDC_ACM_0);
+        if (cdc_err != ESP_OK) {
+            ESP_LOGW(TAG, "Deinitialize USB telemetry CDC failed: %s", esp_err_to_name(cdc_err));
+        }
+    }
+    s_usb_telemetry_port_open = false;
+
     esp_err_t err = tinyusb_driver_uninstall();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Uninstall TinyUSB HID failed: %s", esp_err_to_name(err));
@@ -165,6 +219,40 @@ esp_err_t usb_keyboard_switch_to_serial_jtag(void)
 bool usb_keyboard_is_ready(void)
 {
     return s_usb_keyboard_installed && tud_mounted() && tud_hid_ready();
+}
+
+bool usb_telemetry_is_ready(void)
+{
+    return s_usb_keyboard_installed &&
+           tinyusb_cdcacm_initialized(TINYUSB_CDC_ACM_0) &&
+           tud_mounted() &&
+           s_usb_telemetry_port_open;
+}
+
+esp_err_t usb_telemetry_write_line(const char *line)
+{
+    ESP_RETURN_ON_FALSE(line != NULL, ESP_ERR_INVALID_ARG, TAG, "Telemetry line is NULL");
+    ESP_RETURN_ON_FALSE(usb_telemetry_is_ready(), ESP_ERR_INVALID_STATE, TAG, "USB telemetry not ready");
+
+    const size_t length = strlen(line);
+    ESP_RETURN_ON_FALSE(length > 0 && length <= USB_TELEMETRY_MAX_LINE_SIZE,
+                        ESP_ERR_INVALID_SIZE,
+                        TAG,
+                        "Telemetry line has invalid length");
+    ESP_RETURN_ON_FALSE(tud_cdc_n_write_available(TINYUSB_CDC_ACM_0) >= length,
+                        ESP_ERR_NO_MEM,
+                        TAG,
+                        "USB telemetry TX queue is full");
+
+    const size_t queued = tinyusb_cdcacm_write_queue(TINYUSB_CDC_ACM_0,
+                                                      (const uint8_t *)line,
+                                                      length);
+    if (queued != length) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    const esp_err_t flush_err = tinyusb_cdcacm_write_flush(TINYUSB_CDC_ACM_0, 0);
+    return (flush_err == ESP_OK || flush_err == ESP_ERR_NOT_FINISHED) ? ESP_OK : flush_err;
 }
 
 static esp_err_t usb_hid_send_keyboard_report(uint8_t modifier, const uint8_t keycodes[6])
