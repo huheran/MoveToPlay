@@ -56,7 +56,7 @@ static const char *TAG = "imu_main";
  * M2P_DONGLE_MODE:   0=view, 1=collect, 2=play
  * *_BOARD_STYLE:     0=current, 1=new
  */
-#define M2P_BOARD_PROFILE             2
+#define M2P_BOARD_PROFILE             1
 #define M2P_DONGLE_MODE               2
 
 #define M2P_CHEST_BOARD_STYLE         1
@@ -116,6 +116,7 @@ static const char *TAG = "imu_main";
 #define DONGLE_ENABLE_HID_EVENT_LOG       1
 #define DONGLE_ENABLE_USB_KEYBOARD        0
 #define DONGLE_ENABLE_USB_MOUSE           0
+#define DONGLE_ENABLE_USB_TELEMETRY        0
 #define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
 #define DONGLE_ENABLE_USB_MOUSE_TEST      0
 #elif DONGLE_DATA_COLLECT_MODE == DONGLE_MODE_DATA_COLLECT
@@ -129,6 +130,7 @@ static const char *TAG = "imu_main";
 #define DONGLE_ENABLE_HID_EVENT_LOG       0
 #define DONGLE_ENABLE_USB_KEYBOARD        0
 #define DONGLE_ENABLE_USB_MOUSE           0
+#define DONGLE_ENABLE_USB_TELEMETRY        0
 #define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
 #define DONGLE_ENABLE_USB_MOUSE_TEST      0
 #else
@@ -142,6 +144,7 @@ static const char *TAG = "imu_main";
 #define DONGLE_ENABLE_HID_EVENT_LOG       0
 #define DONGLE_ENABLE_USB_KEYBOARD        1
 #define DONGLE_ENABLE_USB_MOUSE           1
+#define DONGLE_ENABLE_USB_TELEMETRY        1
 #define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
 #define DONGLE_ENABLE_USB_MOUSE_TEST      0
 #endif
@@ -155,6 +158,8 @@ static const char *TAG = "imu_main";
 #define IMU_PRINT_DECIMATION          10
 #define DONGLE_SERIAL_STATE_RATE_HZ   25
 #define DONGLE_SERIAL_STATE_PERIOD_MS (1000 / DONGLE_SERIAL_STATE_RATE_HZ)
+#define DONGLE_TELEMETRY_PERIOD_MS    100
+#define DONGLE_TELEMETRY_STALE_MS     750
 #define DONGLE_MAX_TRACKER_NODES      8
 #define DONGLE_WIFI_DISPLAY_GPIO      GPIO_NUM_4
 #define DONGLE_WIFI_DISPLAY_ACTIVE_LEVEL 0
@@ -1336,6 +1341,74 @@ static const char *dongle_action_class_display_name(uint8_t class_idx)
     return "未知动作";
 }
 
+#if DONGLE_ENABLE_USB_TELEMETRY
+typedef struct {
+    uint8_t action_class;
+    uint8_t confidence_percent;
+    uint8_t intensity_percent;
+    bool active;
+    int64_t last_inference_us;
+    uint32_t event_count;
+    uint8_t event_action_class;
+    const char *event_name;
+} dongle_telemetry_state_t;
+
+static dongle_telemetry_state_t s_dongle_telemetry_state = {
+    .action_class = DONGLE_IDLE_CLASS,
+    .event_action_class = DONGLE_IDLE_CLASS,
+    .event_name = "none",
+};
+static uint32_t s_dongle_telemetry_packet_sequence;
+static int64_t s_dongle_last_telemetry_send_us;
+static float s_dongle_smoothed_motion_intensity;
+static float dongle_effective_min_confidence(uint8_t class_idx);
+
+static void dongle_telemetry_update_inference(uint8_t class_idx,
+                                              float confidence,
+                                              uint8_t intensity_percent,
+                                              int64_t now_us)
+{
+    const bool confident = class_idx < DONGLE_NUM_CLASSES &&
+                           confidence >= dongle_effective_min_confidence(class_idx);
+    const uint8_t display_class = confident ? class_idx : DONGLE_IDLE_CLASS;
+
+    s_dongle_telemetry_state.action_class = display_class;
+    s_dongle_telemetry_state.confidence_percent =
+        (uint8_t)(confidence <= 0.0f ? 0U :
+                  confidence >= 1.0f ? 100U :
+                  (uint8_t)(confidence * 100.0f + 0.5f));
+    s_dongle_telemetry_state.intensity_percent = intensity_percent;
+    s_dongle_telemetry_state.active = confident &&
+                                      display_class != DONGLE_IDLE_CLASS &&
+                                      display_class != DONGLE_MOVE_NOISE_CLASS;
+    s_dongle_telemetry_state.last_inference_us = now_us;
+}
+
+static bool dongle_telemetry_event_is_countable(const char *event)
+{
+    return strcmp(event, "key_tap") == 0 ||
+           strcmp(event, "key_tap_with_movement") == 0 ||
+           strcmp(event, "character_cycle") == 0 ||
+           strcmp(event, "mouse_click") == 0 ||
+           strcmp(event, "mouse_hold") == 0;
+}
+
+static void dongle_telemetry_note_output(uint8_t class_idx, const char *event)
+{
+    if (event == NULL ||
+        strcmp(event, "key_release") == 0 ||
+        strcmp(event, "mouse_release") == 0) {
+        return;
+    }
+
+    s_dongle_telemetry_state.event_action_class = class_idx;
+    s_dongle_telemetry_state.event_name = event;
+    if (dongle_telemetry_event_is_countable(event)) {
+        s_dongle_telemetry_state.event_count++;
+    }
+}
+#endif
+
 #if DONGLE_ENABLE_ACTION_DEBUG_OUTPUT
 static bool s_dongle_hid_trigger_since_last_print = false;
 static uint32_t s_dongle_hid_trigger_count_since_last_print = 0;
@@ -1366,6 +1439,11 @@ static void dongle_log_key_event(uint8_t class_idx,
                                  esp_err_t err)
 {
     dongle_note_hid_trigger(class_idx, event);
+#if DONGLE_ENABLE_USB_TELEMETRY
+    if (err == ESP_OK) {
+        dongle_telemetry_note_output(class_idx, event);
+    }
+#endif
 #if DONGLE_ENABLE_HID_EVENT_LOG
 #if DONGLE_ENABLE_USB_KEYBOARD
     printf("%s: action=%s event=%s modifier=0x%02x key=%s result=%s\n",
@@ -1397,6 +1475,11 @@ static void dongle_log_mouse_button_event(uint8_t class_idx,
                                           esp_err_t err)
 {
     dongle_note_hid_trigger(class_idx, event);
+#if DONGLE_ENABLE_USB_TELEMETRY
+    if (err == ESP_OK) {
+        dongle_telemetry_note_output(class_idx, event);
+    }
+#endif
 #if DONGLE_ENABLE_HID_EVENT_LOG
 #if DONGLE_ENABLE_USB_MOUSE
     printf("%s: action=%s event=%s buttons=0x%02x result=%s\n",
@@ -1422,6 +1505,11 @@ static void dongle_log_mouse_button_event(uint8_t class_idx,
 static void dongle_log_mouse_move_event(uint8_t class_idx, int16_t dx, esp_err_t err)
 {
     dongle_note_hid_trigger(class_idx, "mouse_move");
+#if DONGLE_ENABLE_USB_TELEMETRY
+    if (err == ESP_OK) {
+        dongle_telemetry_note_output(class_idx, "mouse_move");
+    }
+#endif
 #if DONGLE_ENABLE_HID_EVENT_LOG
 #if DONGLE_ENABLE_USB_MOUSE
     printf("%s: action=%s event=mouse_move dx=%d result=%s\n",
@@ -2161,6 +2249,43 @@ static bool dongle_build_rf_frame(rf_infer_node_sample_t frame[RF_INFER_NODE_COU
     return true;
 }
 
+#if DONGLE_ENABLE_USB_TELEMETRY
+static float dongle_absf(float value)
+{
+    return value < 0.0f ? -value : value;
+}
+
+static uint8_t dongle_motion_intensity_percent(
+    const rf_infer_node_sample_t frame[RF_INFER_NODE_COUNT])
+{
+    float total_score = 0.0f;
+    for (uint8_t node = 0; node < RF_INFER_NODE_COUNT; node++) {
+        const float accel_magnitude_squared =
+            frame[node].ax * frame[node].ax +
+            frame[node].ay * frame[node].ay +
+            frame[node].az * frame[node].az;
+        const float dynamic_acceleration = dongle_absf(accel_magnitude_squared - 1.0f);
+        const float gyro_activity = dongle_absf(frame[node].gx) +
+                                    dongle_absf(frame[node].gy) +
+                                    dongle_absf(frame[node].gz);
+        total_score += dynamic_acceleration * 35.0f + gyro_activity / 15.0f;
+    }
+
+    float raw_percent = total_score / (float)RF_INFER_NODE_COUNT;
+    if (raw_percent > 100.0f) {
+        raw_percent = 100.0f;
+    }
+    s_dongle_smoothed_motion_intensity =
+        s_dongle_smoothed_motion_intensity * 0.75f + raw_percent * 0.25f;
+    if (s_dongle_smoothed_motion_intensity < 0.0f) {
+        s_dongle_smoothed_motion_intensity = 0.0f;
+    } else if (s_dongle_smoothed_motion_intensity > 100.0f) {
+        s_dongle_smoothed_motion_intensity = 100.0f;
+    }
+    return (uint8_t)(s_dongle_smoothed_motion_intensity + 0.5f);
+}
+#endif
+
 static void dongle_run_rf_inference(int64_t now_us)
 {
     rf_infer_node_sample_t frame[RF_INFER_NODE_COUNT] = {0};
@@ -2217,6 +2342,13 @@ static void dongle_run_rf_inference(int64_t now_us)
         result_label = result.label;
         result_frames = result.frame_count;
     }
+
+#if DONGLE_ENABLE_USB_TELEMETRY
+    dongle_telemetry_update_inference(result_class,
+                                      result_confidence,
+                                      dongle_motion_intensity_percent(frame),
+                                      now_us);
+#endif
 
 #if DONGLE_ENABLE_HID_ACTION_LOG
     dongle_send_key_action(result_class, result_confidence, now_us);
@@ -2373,6 +2505,88 @@ static void dongle_status_snapshot(dongle_status_node_snapshot_t snapshot[DONGLE
     }
     dongle_state_unlock();
 }
+
+#if DONGLE_ENABLE_USB_TELEMETRY
+static int dongle_telemetry_battery_value(const dongle_status_node_snapshot_t *node)
+{
+    return node->battery_valid ? (int)node->battery_percent : -1;
+}
+
+static void dongle_telemetry_maybe_send(int64_t now_us)
+{
+    if (!usb_telemetry_is_ready() ||
+        now_us - s_dongle_last_telemetry_send_us <
+            ((int64_t)DONGLE_TELEMETRY_PERIOD_MS * 1000LL)) {
+        return;
+    }
+    s_dongle_last_telemetry_send_us = now_us;
+
+    dongle_status_node_snapshot_t nodes[DONGLE_MAX_TRACKER_NODES] = {0};
+    dongle_status_blade_snapshot_t blade = {0};
+    dongle_status_snapshot(nodes, &blade);
+
+    uint8_t tracker_mask = 0;
+    uint8_t tracker_online = 0;
+    for (uint8_t i = 0; i < RF_INFER_NODE_COUNT; i++) {
+        if (nodes[i].online) {
+            tracker_mask |= (uint8_t)(1U << i);
+            tracker_online++;
+        }
+    }
+
+    uint8_t action_class = s_dongle_telemetry_state.action_class;
+    uint8_t confidence_percent = s_dongle_telemetry_state.confidence_percent;
+    uint8_t intensity_percent = s_dongle_telemetry_state.intensity_percent;
+    bool active = s_dongle_telemetry_state.active;
+    if (s_dongle_telemetry_state.last_inference_us <= 0 ||
+        now_us - s_dongle_telemetry_state.last_inference_us >
+            ((int64_t)DONGLE_TELEMETRY_STALE_MS * 1000LL)) {
+        action_class = DONGLE_IDLE_CLASS;
+        confidence_percent = 0;
+        intensity_percent = 0;
+        active = false;
+    }
+
+    const uint8_t quality_percent =
+        (uint8_t)((tracker_online * 100U) / RF_INFER_NODE_COUNT);
+    const int blade_battery = blade.battery_valid ? (int)blade.battery_percent : -1;
+    char line[500];
+    const int written = snprintf(
+        line,
+        sizeof(line),
+        "{\"v\":1,\"source\":\"MoveToPlay-Dongle\",\"seq\":%" PRIu32
+        ",\"time_ms\":%" PRIu64 ",\"type\":\"state\",\"action_id\":%u"
+        ",\"action\":\"%s\",\"confidence\":%u,\"intensity\":%u,\"active\":%s"
+        ",\"event_count\":%" PRIu32 ",\"event_action\":\"%s\",\"event\":\"%s\""
+        ",\"tracker_mask\":%u,\"tracker_online\":%u,\"quality\":%u"
+        ",\"blade_online\":%s,\"battery\":[%d,%d,%d,%d,%d]}\n",
+        s_dongle_telemetry_packet_sequence++,
+        (uint64_t)(now_us / 1000LL),
+        action_class,
+        dongle_action_class_name(action_class),
+        confidence_percent,
+        intensity_percent,
+        active ? "true" : "false",
+        s_dongle_telemetry_state.event_count,
+        dongle_action_class_name(s_dongle_telemetry_state.event_action_class),
+        s_dongle_telemetry_state.event_name,
+        tracker_mask,
+        tracker_online,
+        quality_percent,
+        blade.online ? "true" : "false",
+        dongle_telemetry_battery_value(&nodes[0]),
+        dongle_telemetry_battery_value(&nodes[1]),
+        dongle_telemetry_battery_value(&nodes[2]),
+        dongle_telemetry_battery_value(&nodes[3]),
+        blade_battery);
+
+    if (written <= 0 || written >= (int)sizeof(line)) {
+        ESP_LOGW(TAG, "USB telemetry packet is too large");
+        return;
+    }
+    (void)usb_telemetry_write_line(line);
+}
+#endif
 
 static const char s_dongle_status_index_prefix[] =
 "<!doctype html><html><head><meta charset=\"utf-8\">"
@@ -3232,6 +3446,9 @@ static void espnow_rx_task(void *arg)
 #if DONGLE_ENABLE_RF_INFERENCE
                 dongle_run_rf_inference(esp_timer_get_time());
 #endif
+#if DONGLE_ENABLE_USB_TELEMETRY
+                dongle_telemetry_maybe_send(esp_timer_get_time());
+#endif
             }
 #if DONGLE_ENABLE_USB_KEYBOARD || DONGLE_ENABLE_USB_MOUSE
             if (s_dongle_hid_mutex != NULL) {
@@ -3740,6 +3957,7 @@ static void start_dongle_mode(void)
 #endif
     ESP_LOGI(TAG, "usb keyboard=%d", DONGLE_ENABLE_USB_KEYBOARD);
     ESP_LOGI(TAG, "usb mouse=%d", DONGLE_ENABLE_USB_MOUSE);
+    ESP_LOGI(TAG, "usb cdc telemetry=%d", DONGLE_ENABLE_USB_TELEMETRY);
 
     led_set(true);
 

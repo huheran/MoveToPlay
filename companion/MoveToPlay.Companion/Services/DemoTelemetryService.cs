@@ -30,6 +30,7 @@ public sealed class DemoTelemetryService : ITelemetrySource
     }
 
     public event EventHandler<TelemetrySnapshot>? SnapshotChanged;
+    public event EventHandler<TelemetrySourceStatus>? StatusChanged;
 
     public void Start()
     {
@@ -39,10 +40,15 @@ public sealed class DemoTelemetryService : ITelemetrySource
         }
 
         Publish(celebrate: true);
+        StatusChanged?.Invoke(this, new TelemetrySourceStatus(true, "DEMO", "正在使用模拟运动数据"));
         _timer.Start();
     }
 
-    public void Stop() => _timer.Stop();
+    public void Stop()
+    {
+        _timer.Stop();
+        StatusChanged?.Invoke(this, new TelemetrySourceStatus(false, "OFFLINE", "模拟数据已停止"));
+    }
 
     private void OnTick(object? sender, EventArgs e)
     {
@@ -87,6 +93,12 @@ public sealed class DemoTelemetryService : ITelemetrySource
             Math.Clamp((int)(_calories / 8.0 * 100.0), 0, 100),
             12 + _seconds / 3,
             encouragement,
-            celebrate));
+            celebrate,
+            92,
+            64,
+            4,
+            100,
+            true,
+            new DeviceBatterySnapshot(86, 92, 89, 83, 78)));
     }
 }

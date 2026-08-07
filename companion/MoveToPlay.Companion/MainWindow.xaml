@@ -184,6 +184,95 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style TargetType="Slider">
+            <Setter Property="Height" Value="24" />
+            <Setter Property="IsMoveToPointEnabled" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid Background="Transparent">
+                            <Border Height="4" VerticalAlignment="Center" Background="#FF273248" CornerRadius="2" />
+                            <Track x:Name="PART_Track">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="{x:Static Slider.DecreaseLarge}">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Background="Transparent" />
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.DecreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Width="14" Height="14">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Ellipse Fill="{Binding DataContext.AccentBrush, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                         Stroke="#FF081018" StrokeThickness="2" />
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="{x:Static Slider.IncreaseLarge}">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Background="Transparent" />
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.IncreaseRepeatButton>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="ScrollBar">
+            <Setter Property="Width" Value="8" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Background="Transparent">
+                            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="{x:Static ScrollBar.PageUpCommand}">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Background="Transparent" />
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.DecreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb x:Name="ScrollThumb" MinHeight="34" Background="#FF3A465A">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Border Margin="1,0" Background="{TemplateBinding Background}" CornerRadius="3" />
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="{x:Static ScrollBar.PageDownCommand}">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Background="Transparent" />
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.IncreaseRepeatButton>
+                            </Track>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ScrollThumb" Property="Background" Value="#FF64748B" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <Border x:Name="MainShell" Background="#ED070B12" BorderBrush="#B8324054" BorderThickness="1" CornerRadius="22">
@@ -215,15 +304,15 @@
                 <Border Grid.Column="1" Margin="0,0,24,0" Padding="11,6" HorizontalAlignment="Right" VerticalAlignment="Center"
                         Background="#2022C55E" CornerRadius="999">
                     <StackPanel Orientation="Horizontal">
-                        <Ellipse Width="7" Height="7" Margin="0,0,7,0" Fill="#FF6EE7B7" />
-                        <TextBlock FontSize="11" Foreground="#FF9FF7CC" Text="演示数据已连接" />
+                        <Ellipse Width="7" Height="7" Margin="0,0,7,0" Fill="{Binding ConnectionStatusBrush}" />
+                        <TextBlock FontSize="11" Foreground="{Binding ConnectionStatusBrush}" Text="{Binding StatusText}" />
                     </StackPanel>
                 </Border>
                 <StackPanel Grid.Column="2" Margin="0,0,14,0" VerticalAlignment="Center" Orientation="Horizontal">
                     <Button Width="38" Height="34" Background="Transparent" BorderThickness="0" Foreground="#FFAAB5C6"
-                            FontSize="18" Content="—" Click="MinimizeButton_Click" />
+                            FontSize="18" Content="—" ToolTip="最小化窗口" Click="MinimizeButton_Click" />
                     <Button Width="38" Height="34" Background="Transparent" BorderThickness="0" Foreground="#FFAAB5C6"
-                            FontSize="16" Content="×" Click="CloseButton_Click" />
+                            FontSize="16" Content="×" ToolTip="隐藏到系统托盘" Click="CloseButton_Click" />
                 </StackPanel>
             </Grid>
 
@@ -240,7 +329,7 @@
                             <StackPanel>
                                 <Grid>
                                     <TextBlock FontSize="13" FontWeight="SemiBold" Foreground="#FFF1F5F9" Text="设备连接" />
-                                    <TextBlock HorizontalAlignment="Right" FontSize="10" Foreground="#FF6EE7B7" Text="DEMO SOURCE" />
+                                    <TextBlock HorizontalAlignment="Right" FontSize="10" Foreground="{Binding ConnectionStatusBrush}" Text="{Binding SourceLabel}" />
                                 </Grid>
                                 <Grid Margin="0,16,0,0">
                                     <Grid.ColumnDefinitions>
@@ -249,20 +338,53 @@
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <StackPanel>
-                                        <TextBlock FontSize="22" FontWeight="Bold" Foreground="#FFF8FAFC" Text="4/4" />
+                                        <TextBlock FontSize="22" FontWeight="Bold" Foreground="#FFF8FAFC" Text="{Binding TrackerStatus}" />
                                         <TextBlock Margin="0,3,0,0" FontSize="10" Foreground="#FF7F8CA3" Text="TRACKER" />
                                     </StackPanel>
                                     <StackPanel Grid.Column="1">
-                                        <TextBlock FontSize="22" FontWeight="Bold" Foreground="#FFF8FAFC" Text="ON" />
+                                        <TextBlock FontSize="22" FontWeight="Bold" Foreground="#FFF8FAFC" Text="{Binding BladeStatus}" />
                                         <TextBlock Margin="0,3,0,0" FontSize="10" Foreground="#FF7F8CA3" Text="BLADE" />
                                     </StackPanel>
                                     <StackPanel Grid.Column="2">
-                                        <TextBlock FontSize="22" FontWeight="Bold" Foreground="{Binding AccentBrush}" Text="25" />
-                                        <TextBlock Margin="0,3,0,0" FontSize="10" Foreground="#FF7F8CA3" Text="FPS DATA" />
+                                        <TextBlock FontSize="22" FontWeight="Bold" Foreground="{Binding AccentBrush}" Text="{Binding SignalQuality}" />
+                                        <TextBlock Margin="0,3,0,0" FontSize="10" Foreground="#FF7F8CA3" Text="SIGNAL" />
                                     </StackPanel>
                                 </Grid>
                                 <TextBlock Margin="0,15,0,0" FontSize="11" Foreground="#FF7F8CA3" TextWrapping="Wrap"
-                                           Text="当前由模拟数据驱动；USB CDC 接口会在 Dongle 协议确定后接入。" />
+                                           Text="{Binding ConnectionDetail}" />
+                                <TextBlock Margin="0,13,0,7" FontSize="10" Foreground="#FF7F8CA3" Text="设备电量" />
+                                <UniformGrid Columns="5">
+                                    <StackPanel>
+                                        <TextBlock HorizontalAlignment="Center" FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="#FFF1F5F9" Text="{Binding ChestBattery}" />
+                                        <TextBlock Margin="0,3,0,0" HorizontalAlignment="Center" FontSize="9"
+                                                   Foreground="#FF7F8CA3" Text="胸部" />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock HorizontalAlignment="Center" FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="#FFF1F5F9" Text="{Binding RightHandBattery}" />
+                                        <TextBlock Margin="0,3,0,0" HorizontalAlignment="Center" FontSize="9"
+                                                   Foreground="#FF7F8CA3" Text="右手" />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock HorizontalAlignment="Center" FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="#FFF1F5F9" Text="{Binding LeftHandBattery}" />
+                                        <TextBlock Margin="0,3,0,0" HorizontalAlignment="Center" FontSize="9"
+                                                   Foreground="#FF7F8CA3" Text="左手" />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock HorizontalAlignment="Center" FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="#FFF1F5F9" Text="{Binding LegBattery}" />
+                                        <TextBlock Margin="0,3,0,0" HorizontalAlignment="Center" FontSize="9"
+                                                   Foreground="#FF7F8CA3" Text="腿部" />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock HorizontalAlignment="Center" FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="{Binding AccentBrush}" Text="{Binding BladeBattery}" />
+                                        <TextBlock Margin="0,3,0,0" HorizontalAlignment="Center" FontSize="9"
+                                                   Foreground="#FF7F8CA3" Text="BLADE" />
+                                    </StackPanel>
+                                </UniformGrid>
                             </StackPanel>
                         </Border>
 
@@ -285,6 +407,44 @@
                         <Border Margin="0,14,0,0" Style="{StaticResource PanelStyle}">
                             <StackPanel>
                                 <TextBlock FontSize="13" FontWeight="SemiBold" Foreground="#FFF1F5F9" Text="悬浮层控制" />
+                                <TextBlock Margin="0,5,0,0" FontSize="10" Foreground="#FF68778D"
+                                           Text="当前位置按游戏主题独立保存" />
+                                <TextBlock Margin="0,13,0,6" FontSize="10" Foreground="#FF7F8CA3" Text="预览 / 适配分辨率" />
+                                <ComboBox x:Name="OverlayResolutionSelector"
+                                          SelectionChanged="OverlayResolutionSelector_SelectionChanged" />
+                                <TextBlock Margin="0,13,0,6" FontSize="10" Foreground="#FF7F8CA3" Text="位置锚点" />
+                                <ComboBox x:Name="OverlayAnchorSelector"
+                                          SelectionChanged="OverlayAnchorSelector_SelectionChanged" />
+                                <Grid Margin="0,12,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="78" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="46" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock VerticalAlignment="Center" FontSize="10" Foreground="#FF8B99AE" Text="水平微调" />
+                                    <Slider x:Name="OverlayOffsetXSlider" Grid.Column="1"
+                                            Minimum="-800" Maximum="800" TickFrequency="10" IsSnapToTickEnabled="True"
+                                            ValueChanged="OverlayOffsetSlider_ValueChanged" />
+                                    <TextBlock x:Name="OverlayOffsetXText" Grid.Column="2" HorizontalAlignment="Right"
+                                               VerticalAlignment="Center" FontFamily="Consolas" FontSize="10"
+                                               Foreground="#FFB7C3D5" Text="0" />
+                                </Grid>
+                                <Grid Margin="0,5,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="78" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="46" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock VerticalAlignment="Center" FontSize="10" Foreground="#FF8B99AE" Text="垂直微调" />
+                                    <Slider x:Name="OverlayOffsetYSlider" Grid.Column="1"
+                                            Minimum="-500" Maximum="500" TickFrequency="10" IsSnapToTickEnabled="True"
+                                            ValueChanged="OverlayOffsetSlider_ValueChanged" />
+                                    <TextBlock x:Name="OverlayOffsetYText" Grid.Column="2" HorizontalAlignment="Right"
+                                               VerticalAlignment="Center" FontFamily="Consolas" FontSize="10"
+                                               Foreground="#FFB7C3D5" Text="0" />
+                                </Grid>
+                                <Button Margin="0,10,0,0" Height="32" Style="{StaticResource GhostButton}"
+                                        Content="恢复当前游戏默认位置" Click="ResetOverlayPlacementButton_Click" />
                                 <Grid Margin="0,14,0,0">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
@@ -297,8 +457,12 @@
                                             Content="播放激励" Click="EncouragementButton_Click" />
                                 </Grid>
                                 <Border Margin="0,13,0,0" Padding="11,8" Background="#FF0C121D" CornerRadius="10">
-                                    <TextBlock FontFamily="Consolas" FontSize="10" Foreground="#FF8FA2B9"
-                                               Text="CTRL + SHIFT + F10  显示 / 隐藏" />
+                                    <StackPanel>
+                                        <TextBlock FontFamily="Consolas" FontSize="10" Foreground="#FF8FA2B9"
+                                                   Text="CTRL + SHIFT + F10  显示 / 隐藏" />
+                                        <TextBlock Margin="0,6,0,0" FontSize="10" Foreground="#FF68778D"
+                                                   Text="关闭主窗口后，程序会继续在系统托盘运行" />
+                                    </StackPanel>
                                 </Border>
                             </StackPanel>
                         </Border>
@@ -312,7 +476,9 @@
                         <RowDefinition Height="164" />
                     </Grid.RowDefinitions>
 
-                    <Border Grid.Row="0" Background="#FF0C121D" BorderBrush="#FF202A3B" BorderThickness="1" CornerRadius="20" ClipToBounds="True">
+                    <Grid x:Name="PreviewHost" Grid.Row="0" SizeChanged="PreviewHost_SizeChanged">
+                    <Border x:Name="PreviewViewport" HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Background="#FF0C121D" BorderBrush="#FF202A3B" BorderThickness="1" CornerRadius="20" ClipToBounds="True">
                         <Grid>
                             <Grid.Background>
                                 <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
@@ -326,8 +492,9 @@
                                      Fill="{Binding AccentBrush}" Opacity="0.06" />
                             <Ellipse Width="300" Height="300" Margin="0,0,-90,-140" HorizontalAlignment="Right" VerticalAlignment="Bottom"
                                      Fill="{Binding AccentSecondaryBrush}" Opacity="0.08" />
-                            <TextBlock Margin="22,18,0,0" HorizontalAlignment="Left" VerticalAlignment="Top" FontFamily="Consolas"
-                                       FontSize="10" Foreground="#FF7D9BB6" Text="TRANSPARENT OVERLAY PREVIEW · 1920 × 1080" />
+                            <TextBlock x:Name="PreviewResolutionText" Margin="22,18,0,0" HorizontalAlignment="Left" VerticalAlignment="Top"
+                                       FontFamily="Consolas" FontSize="10" Foreground="#FF7D9BB6"
+                                       Text="TRANSPARENT OVERLAY PREVIEW · AUTO" />
                             <TextBlock Margin="0,0,25,18" HorizontalAlignment="Right" VerticalAlignment="Bottom" FontSize="11"
                                        Foreground="#FF5F6D82" Text="游戏画面区域" />
 
@@ -386,7 +553,7 @@
                                         </Grid.ColumnDefinitions>
                                         <Border Grid.Column="0" Padding="0" Background="Transparent" BorderThickness="0">
                                             <StackPanel>
-                                                <TextBlock FontFamily="{Binding HudFontFamily}" FontSize="8" Foreground="{Binding MutedTextBrush}" Text="心率" />
+                                                <TextBlock FontFamily="{Binding HudFontFamily}" FontSize="8" Foreground="{Binding MutedTextBrush}" Text="运动后心率" />
                                                 <controls:OutlinedText Margin="0,1,0,0" FontFamily="{Binding HudFontFamily}" FontSize="17" FontWeight="Black"
                                                                        Foreground="{Binding PrimaryTextBrush}" Stroke="#FF000000" StrokeThickness="1.35"
                                                                        Text="{Binding HeartRate, StringFormat={}{0} BPM}" />
@@ -440,6 +607,7 @@
                             </Border>
                         </Grid>
                     </Border>
+                    </Grid>
 
                     <Grid Grid.Row="2">
                         <Grid.ColumnDefinitions>
@@ -451,12 +619,12 @@
                         </Grid.ColumnDefinitions>
                         <Border Grid.Column="0" Style="{StaticResource PanelStyle}">
                             <StackPanel>
-                                <TextBlock FontSize="10" Foreground="#FF7F8CA3" Text="实时心率" />
+                                <TextBlock FontSize="10" Foreground="#FF7F8CA3" Text="运动后心率" />
                                 <StackPanel Margin="0,8,0,0" Orientation="Horizontal">
                                     <TextBlock FontSize="31" FontWeight="Bold" Foreground="#FFFF7690" Text="{Binding HeartRate}" />
                                     <TextBlock Margin="5,13,0,0" FontSize="10" Foreground="#FF7F8CA3" Text="BPM" />
                                 </StackPanel>
-                                <TextBlock Margin="0,8,0,0" FontSize="10" Foreground="#FF9AA8BA" Text="有氧区间 · 演示值" />
+                                <TextBlock Margin="0,8,0,0" FontSize="10" Foreground="#FF9AA8BA" Text="本次运动结束后静止测量" />
                             </StackPanel>
                         </Border>
                         <Border Grid.Column="2" Style="{StaticResource PanelStyle}">
