@@ -67,7 +67,7 @@ def normalize_event_group(value: str) -> str:
 
 
 def load_samples(path: Path) -> pd.DataFrame:
-    df = pd.read_csv(path)
+    df = pd.read_csv(path, low_memory=False)
     required = {"pc_timestamp_ms", "board_timestamp_ms", "node_id", *BASE_CHANNELS, "session_id"}
     missing = sorted(required - set(df.columns))
     if missing:
