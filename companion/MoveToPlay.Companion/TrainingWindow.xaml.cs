@@ -30,6 +30,16 @@ public partial class TrainingWindow : Window
         new(BladeMarkingMode.Countdown, "倒计时提示音（推荐）"),
     ];
 
+    private static readonly TrainingLabelOption[] EventGroupOptions =
+    [
+        new("attack_event", "攻击动作"),
+        new("skill_event", "技能动作"),
+        new("jump_event", "跳跃动作"),
+        new("turn_event", "转向动作"),
+        new("pause_event", "暂停/菜单动作"),
+        new("custom_event", "自定义/其他"),
+    ];
+
     private readonly Action _pauseTelemetry;
     private readonly Action _resumeTelemetry;
     private readonly ImuCollectionService _collector = new();
@@ -42,6 +52,8 @@ public partial class TrainingWindow : Window
     private CloudDataset? _activeDataset;
     private CloudJob? _activeJob;
     private CloudArtifact[] _artifacts = [];
+    private TrainingEventOption? _editingEvent;
+    private bool _creatingEvent;
     private bool _telemetryPaused;
 
     public TrainingWindow(Action pauseTelemetry, Action resumeTelemetry)
@@ -55,6 +67,7 @@ public partial class TrainingWindow : Window
         {
             _eventOptions.Add(option);
         }
+        EventGroupSelector.ItemsSource = EventGroupOptions;
         EventSelector.ItemsSource = _eventOptions;
         EventSelector.SelectedIndex = _eventOptions.Count > 0 ? 0 : -1;
         BladeModeSelector.ItemsSource = BladeMarkingModes;
@@ -181,9 +194,14 @@ public partial class TrainingWindow : Window
     {
         if (EventSelector.SelectedItem is TrainingEventOption marker)
         {
+            _editingEvent = marker;
+            _creatingEvent = false;
             EventDisplayNameText.Text = marker.DisplayName;
             EventTypeText.Text = marker.Type;
-            EventGroupText.Text = marker.Group;
+            EventGroupSelector.SelectedItem = EventGroupOptions.FirstOrDefault(option =>
+                option.Id.Equals(marker.Group, StringComparison.Ordinal)) ?? EventGroupOptions[^1];
+            SaveEventOptionButton.Content = "保存修改";
+            DeleteEventOptionButton.IsEnabled = true;
         }
         UpdateCollectorBladeSettings();
     }
@@ -193,43 +211,71 @@ public partial class TrainingWindow : Window
     private void BladeModeSelector_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
         UpdateCollectorBladeSettings();
 
+    private void NewEventOption_Click(object sender, RoutedEventArgs e)
+    {
+        _editingEvent = null;
+        _creatingEvent = true;
+        EventSelector.SelectedIndex = -1;
+        EventDisplayNameText.Text = "";
+        EventTypeText.Text = NextCustomActionId();
+        EventGroupSelector.SelectedItem = EventGroupOptions[^1];
+        SaveEventOptionButton.Content = "创建动作";
+        DeleteEventOptionButton.IsEnabled = false;
+        EventDisplayNameText.Focus();
+        CollectionStatusText.Text = "正在新建动作：填写显示名称后点击“创建动作”";
+    }
+
     private void SaveEventOption_Click(object sender, RoutedEventArgs e)
     {
+        var wasCreating = _creatingEvent;
+        var group = (EventGroupSelector.SelectedItem as TrainingLabelOption)?.Id ?? "custom_event";
         var option = new TrainingEventOption(
-            EventGroupText.Text.Trim().ToLowerInvariant(),
+            group,
             EventTypeText.Text.Trim().ToLowerInvariant(),
             EventDisplayNameText.Text.Trim());
         if (!EventCatalogService.IsValid(option))
         {
             MessageBox.Show(
                 this,
-                "名称不能为空；动作 ID 和事件组必须以英文字母开头，只能包含英文小写、数字和下划线，最长31个字符。",
+                "请填写动作的显示名称。",
                 "动作信息无效",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
             return;
         }
 
-        var existingIndex = _eventOptions
-            .Select((item, index) => (item, index))
-            .FirstOrDefault(pair => pair.item.Type.Equals(option.Type, StringComparison.Ordinal)).index;
-        var existing = _eventOptions.FirstOrDefault(item => item.Type.Equals(option.Type, StringComparison.Ordinal));
-        if (existing is null)
+        var snapshot = _eventOptions.ToArray();
+        if (_creatingEvent)
         {
             _eventOptions.Add(option);
         }
+        else if (_editingEvent is not null)
+        {
+            var existingIndex = _eventOptions.IndexOf(_editingEvent);
+            if (existingIndex < 0)
+            {
+                MessageBox.Show(this, "当前动作已经不在列表中，请重新选择。", "无法保存", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            _eventOptions[existingIndex] = option;
+        }
         else
         {
-            _eventOptions[existingIndex] = option;
+            return;
         }
         try
         {
             _eventCatalog.Save(_eventOptions);
             EventSelector.SelectedItem = option;
-            CollectionStatusText.Text = $"动作事件库已保存：{option.DisplayName} ({option.Type})";
+            CollectionStatusText.Text = wasCreating
+                ? $"新动作已创建：{option.DisplayName}"
+                : $"动作修改已保存：{option.DisplayName}";
+            _creatingEvent = false;
+            _editingEvent = option;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
+            RestoreEventOptions(snapshot);
             MessageBox.Show(this, exception.Message, "动作事件库保存失败", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
@@ -245,6 +291,17 @@ public partial class TrainingWindow : Window
             MessageBox.Show(this, "动作事件库至少要保留一个动作。", "无法删除", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
+        var confirmation = MessageBox.Show(
+            this,
+            $"只把“{selected.DisplayName}”从本机动作列表移除。\n\n不会删除已经采集的 CSV 标签、云端数据或训练模型。是否继续？",
+            "从动作列表移除",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+        if (confirmation != MessageBoxResult.Yes)
+        {
+            return;
+        }
+        var snapshot = _eventOptions.ToArray();
         _eventOptions.Remove(selected);
         try
         {
@@ -254,10 +311,32 @@ public partial class TrainingWindow : Window
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            _eventOptions.Add(selected);
-            EventSelector.SelectedItem = selected;
+            RestoreEventOptions(snapshot);
             MessageBox.Show(this, exception.Message, "动作事件库保存失败", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    private string NextCustomActionId()
+    {
+        for (var sequence = 1; sequence <= 9999; sequence++)
+        {
+            var candidate = $"custom_action_{sequence:D3}";
+            if (_eventOptions.All(item => !item.Type.Equals(candidate, StringComparison.Ordinal)))
+            {
+                return candidate;
+            }
+        }
+        throw new InvalidOperationException("自定义动作数量已达到上限。 ");
+    }
+
+    private void RestoreEventOptions(IEnumerable<TrainingEventOption> snapshot)
+    {
+        _eventOptions.Clear();
+        foreach (var item in snapshot)
+        {
+            _eventOptions.Add(item);
+        }
+        EventSelector.SelectedItem = _editingEvent ?? _eventOptions.FirstOrDefault();
     }
 
     private void UpdateCollectorBladeSettings()
@@ -266,6 +345,14 @@ public partial class TrainingWindow : Window
         var mode = (BladeModeSelector?.SelectedItem as BladeMarkingModeOption)?.Mode ?? BladeMarkingMode.Immediate;
         var countdownMs = ParseInt(BladeCountdownText?.Text, 1000);
         var compensationMs = ParseInt(BladeCompensationText?.Text, 50);
+        if (BladeCountdownPanel is not null)
+        {
+            BladeCountdownPanel.Visibility = mode == BladeMarkingMode.Countdown ? Visibility.Visible : Visibility.Collapsed;
+        }
+        if (BladeCompensationPanel is not null)
+        {
+            BladeCompensationPanel.Visibility = mode == BladeMarkingMode.Immediate ? Visibility.Visible : Visibility.Collapsed;
+        }
         _collector.ConfigureBladeMarker(selectedEvent, mode, countdownMs, compensationMs);
     }
 

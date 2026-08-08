@@ -135,36 +135,37 @@
                                 <ComboBox x:Name="EventSelector" SelectionChanged="EventSelector_SelectionChanged" />
                                 <TextBlock Margin="0,13,0,6" Foreground="#FF93A3B8" Text="Blade 标记方式" />
                                 <ComboBox x:Name="BladeModeSelector" SelectionChanged="BladeModeSelector_SelectionChanged" />
-                                <Grid Margin="0,12,0,0">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="12" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel>
-                                        <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="倒计时 ms" />
-                                        <TextBox x:Name="BladeCountdownText" Text="1000" LostFocus="BladeSettings_Changed" />
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="2">
-                                        <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="即时延迟补偿 ms" />
-                                        <TextBox x:Name="BladeCompensationText" Text="50" LostFocus="BladeSettings_Changed" />
-                                    </StackPanel>
-                                </Grid>
+                                <StackPanel x:Name="BladeCountdownPanel" Margin="0,12,0,0" Visibility="Collapsed">
+                                    <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="倒计时（毫秒）" />
+                                    <TextBox x:Name="BladeCountdownText" Text="1000" LostFocus="BladeSettings_Changed" />
+                                </StackPanel>
+                                <StackPanel x:Name="BladeCompensationPanel" Margin="0,12,0,0">
+                                    <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="即时延迟补偿（毫秒）" />
+                                    <TextBox x:Name="BladeCompensationText" Text="50" LostFocus="BladeSettings_Changed" />
+                                </StackPanel>
                                 <StackPanel Margin="0,14,0,0" Orientation="Horizontal">
                                     <Button Style="{StaticResource Primary}" Content="立即标记所选动作" Click="MarkSelectedEvent_Click" />
                                 </StackPanel>
 
                                 <Border Margin="0,10,0,13" Height="1" Background="#FF263246" />
                                 <TextBlock FontSize="14" FontWeight="SemiBold" Text="编辑动作事件库" />
+                                <TextBlock Margin="0,7,0,8" Foreground="#FF8291A7" TextWrapping="Wrap"
+                                           Text="新建动作时只需填写显示名称并选择类别，系统会自动生成内部编号。" />
+                                <Button HorizontalAlignment="Left" Content="＋ 新建动作" Click="NewEventOption_Click" />
                                 <TextBlock Margin="0,8,0,5" Foreground="#FF93A3B8" Text="显示名称" />
                                 <TextBox x:Name="EventDisplayNameText" />
-                                <TextBlock Margin="0,9,0,5" Foreground="#FF93A3B8" Text="动作 ID（英文小写）" />
-                                <TextBox x:Name="EventTypeText" />
-                                <TextBlock Margin="0,9,0,5" Foreground="#FF93A3B8" Text="事件组 ID" />
-                                <TextBox x:Name="EventGroupText" Text="custom_event" />
+                                <TextBlock Margin="0,9,0,5" Foreground="#FF93A3B8" Text="系统动作编号（自动生成）" />
+                                <TextBox x:Name="EventTypeText" IsReadOnly="True" />
+                                <TextBlock Margin="0,9,0,5" Foreground="#FF93A3B8" Text="动作类别（用于整理）" />
+                                <ComboBox x:Name="EventGroupSelector" />
+                                <TextBlock Margin="0,5,0,0" FontSize="10" Foreground="#FF718096" TextWrapping="Wrap"
+                                           Text="类别不决定模型动作名称；模型按上面的系统动作编号区分。" />
                                 <StackPanel Margin="0,13,0,0" Orientation="Horizontal">
-                                    <Button Content="新增 / 保存" Click="SaveEventOption_Click" />
-                                    <Button Content="删除所选" Click="DeleteEventOption_Click" />
+                                    <Button x:Name="SaveEventOptionButton" Style="{StaticResource Primary}"
+                                            Content="保存修改" Click="SaveEventOption_Click" />
+                                    <Button x:Name="DeleteEventOptionButton" Content="仅从动作列表移除"
+                                            ToolTip="不会删除已经采集的 CSV、云端数据或训练模型"
+                                            Click="DeleteEventOption_Click" />
                                 </StackPanel>
 
                                 <Border Margin="0,8,0,0" Padding="14" Background="#172DD4BF" BorderBrush="#552DD4BF"
