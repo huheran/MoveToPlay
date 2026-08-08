@@ -10,6 +10,6 @@ h11==0.16.0
 idna==3.18
 pydantic==2.13.4
 pydantic-core==2.46.4
-starlette==1.5.0
+starlette==1.4.1
 typing-extensions==4.16.0
 typing-inspection==0.4.2
