@@ -28,6 +28,7 @@ companion/**/companion-error.log
 *~
 __pycache__/
 .venv-training/
+.venv-server/
 logs/
 .DS_Store
 Thumbs.db

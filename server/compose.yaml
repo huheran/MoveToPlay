@@ -1,0 +1,12 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: movetoplay-server:local
+    container_name: movetoplay-server
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    security_opt:
+      - no-new-privileges:true
