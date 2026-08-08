@@ -4,7 +4,10 @@ FROM public.ecr.aws/docker/library/python:3.12-slim@sha256:229a2c5bfa27522db7815
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+    PIP_DEFAULT_TIMEOUT=60 \
+    PIP_RETRIES=5
 
 WORKDIR /app
 

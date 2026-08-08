@@ -9,6 +9,7 @@
 - 应用在容器内使用非 root 用户运行，并启用 `no-new-privileges`。
 - 原始训练数据和模型产物放在服务器持久目录中，不提交到 Git。
 - Python 基础镜像通过 ECS 实测可达的 ECR Public 获取，并固定镜像摘要，避免 Docker Hub 网络超时和镜像漂移。
+- 容器构建通过阿里云 PyPI 镜像下载已锁定版本的 Python 包，以适应中国大陆 ECS 的网络环境。
 
 ## 本机测试
 
