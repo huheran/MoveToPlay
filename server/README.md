@@ -8,6 +8,7 @@
 - 服务器初始化脚本只安装 Docker、Compose、Git 和基础证书工具，创建应用目录；不会修改 ECS 安全组。
 - 应用在容器内使用非 root 用户运行，并启用 `no-new-privileges`。
 - 原始训练数据和模型产物放在服务器持久目录中，不提交到 Git。
+- Python 基础镜像通过 ECS 实测可达的 ECR Public 获取，并固定镜像摘要，避免 Docker Hub 网络超时和镜像漂移。
 
 ## 本机测试
 
