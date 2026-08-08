@@ -6,7 +6,28 @@ services:
     image: movetoplay-server:local
     container_name: movetoplay-server
     restart: unless-stopped
+    env_file:
+      - ${MOVETOPLAY_ENV_FILE:-/home/movetoplay/MoveToPlay/shared/server.env}
+    environment:
+      MOVETOPLAY_STORAGE_ROOT: /srv/movetoplay
+    volumes:
+      - ${MOVETOPLAY_SHARED_ROOT:-/home/movetoplay/MoveToPlay/shared}:/srv/movetoplay
     ports:
       - "127.0.0.1:8000:8000"
+    security_opt:
+      - no-new-privileges:true
+
+  worker:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile.worker
+    image: movetoplay-training-worker:local
+    container_name: movetoplay-training-worker
+    restart: unless-stopped
+    environment:
+      MOVETOPLAY_STORAGE_ROOT: /srv/movetoplay
+      MOVETOPLAY_SOURCE_COMMIT: ${MOVETOPLAY_SOURCE_COMMIT:-unknown}
+    volumes:
+      - ${MOVETOPLAY_SHARED_ROOT:-/home/movetoplay/MoveToPlay/shared}:/srv/movetoplay
     security_opt:
       - no-new-privileges:true

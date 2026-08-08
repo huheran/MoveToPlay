@@ -7,14 +7,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
     PIP_DEFAULT_TIMEOUT=60 \
-    PIP_RETRIES=5
+    PIP_RETRIES=5 \
+    PIP_ROOT_USER_ACTION=ignore
 
 WORKDIR /app
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --requirement requirements.txt \
-    && groupadd --system app \
-    && useradd --system --gid app --home-dir /app app
+    && groupadd --gid 1000 app \
+    && useradd --uid 1000 --gid app --home-dir /app --no-create-home app
 
 COPY --chown=app:app app ./app
 

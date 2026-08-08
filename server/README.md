@@ -1,61 +1,75 @@
-# MoveToPlay 云端服务
+# MoveToPlay 云端训练服务
 
-当前阶段先建立一个最小、可验证的 FastAPI 服务，后续再接入设备数据上传、训练任务、模型版本管理和 C 数组产物下载。
+当前版本已经把 processed CSV 数据上传、完整性校验、异步训练、质量门禁、模型审批和产物下载串成一个闭环。API 与训练 worker 是两个独立容器，共享 SQLite 状态库和持久目录；worker 同一时间只执行一个任务，避免 8 GB ECS 被多个随机森林任务同时耗尽内存。
 
 ## 安全边界
 
-- API 容器只绑定服务器回环地址 `127.0.0.1:8000`，不会直接暴露到公网。
-- 服务器初始化脚本只安装 Docker、Compose、Git 和基础证书工具，创建应用目录；不会修改 ECS 安全组。
-- 应用在容器内使用非 root 用户运行，并启用 `no-new-privileges`。
-- 原始训练数据和模型产物放在服务器持久目录中，不提交到 Git。
-- Python 基础镜像通过 ECS 实测可达的 ECR Public 获取，并固定镜像摘要，避免 Docker Hub 网络超时和镜像漂移。
-- 容器构建通过阿里云 PyPI 镜像下载已锁定版本的 Python 包，以适应中国大陆 ECS 的网络环境。
+- API 只绑定服务器回环地址 `127.0.0.1:8000`，当前通过 SSH 隧道访问，不开放公网端口。
+- 除 `/`、`/health` 和接口文档外，业务接口都要求 Bearer Token。
+- API 与 worker 均以 UID 1000 的非 root 用户运行，并启用 `no-new-privileges`。
+- API 不挂载 Docker Socket，不能创建或控制其他容器。
+- 上传文件最大 256 MiB，单个请求块最大 8 MiB；服务端校验声明大小、SHA-256 和 CSV 表头。
+- 数据、任务状态、模型和 C 数组均保存在服务器持久目录，不进入 Git 或容器镜像。
+- 训练通过质量门禁后仍不会自动更新固件，必须先调用人工审批接口。
+- Python 基础镜像固定摘要；依赖固定版本并通过阿里云 PyPI 镜像下载。
+
+完整接口和状态说明见 [API_PROTOCOL.md](API_PROTOCOL.md)。
 
 ## 本机测试
 
-在仓库根目录运行：
+worker 测试会真正执行一次小型数据集校验，因此使用已安装训练依赖的隔离环境：
 
 ```powershell
-python -m venv .venv-server
-.\.venv-server\Scripts\python.exe -m pip install -r server\requirements-dev.txt
+.\.venv-training\Scripts\python.exe -m pip install -r server\requirements-dev.txt
 Push-Location server
-..\.venv-server\Scripts\python.exe -m pytest
+..\.venv-training\Scripts\python.exe -m pytest
 Pop-Location
 ```
 
-## ECS 一次性初始化
+## 服务器配置
 
-先检查脚本内容，再在 Remote SSH 终端中手动输入 sudo 密码：
+真实令牌只存于服务器：
 
-```bash
-sed -n '1,240p' /home/movetoplay/bootstrap-server.sh
-sudo bash /home/movetoplay/bootstrap-server.sh
+```text
+/home/movetoplay/MoveToPlay/shared/server.env
 ```
 
-执行完成后重新建立 SSH 连接，让 Docker 用户组权限生效。
+格式参考 `server.env.example`，文件权限应为 `0600`。部署时 Compose 会自动读取它。
 
-## 启动与验证
+## 启动与检查
 
-把由 `git archive` 生成的部署包上传到服务器后运行：
+版本包由本机 `git archive` 生成并校验 SHA-256，再通过 SSH 上传。服务器运行：
 
 ```bash
-chmod +x /home/movetoplay/deploy-release.sh
 /home/movetoplay/deploy-release.sh \
   /home/movetoplay/MoveToPlay/MoveToPlay-<提交ID>.tar.gz \
   <提交ID>
-curl --fail --silent http://127.0.0.1:8000/
+
+cd /home/movetoplay/MoveToPlay/current/server
+docker compose ps
+docker compose logs --tail 100 api worker
+curl --fail --silent http://127.0.0.1:8000/health
 ```
 
-预期响应：
+## 从 Windows 上传
 
-```json
-{"status":"MoveToPlay server running"}
-```
-
-如需从本机浏览器访问，建立 SSH 隧道：
+先保持 SSH 隧道窗口运行：
 
 ```powershell
 ssh -L 8000:127.0.0.1:8000 movetoplay-server
 ```
 
-然后打开 `http://127.0.0.1:8000/` 或接口文档 `http://127.0.0.1:8000/docs`。
+在另一个 PowerShell 中设置令牌并上传。历史合并数据的 `event_id` 只在 session 内唯一，所以使用 `session`；新采集数据默认应使用全局唯一 ID。
+
+```powershell
+$env:MOVETOPLAY_API_TOKEN = '<服务器令牌>'
+python tools\upload_training_dataset.py `
+  --samples data\processed\event_samples_combined_slash_full.csv `
+  --events data\processed\event_events_combined_slash_full.csv `
+  --name 'movetoplay-latest-v2' `
+  --event-id-scope session `
+  --mode train `
+  --wait
+```
+
+命令意外中断后，使用第一次输出的 dataset ID 加 `--dataset-id <ID>` 即可从服务器记录的字节偏移继续上传。
