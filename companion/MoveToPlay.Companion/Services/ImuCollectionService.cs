@@ -136,7 +136,7 @@ public sealed class ImuCollectionService : IDisposable
         {
             port.Open();
             _port = port;
-            Publish(true, $"{portName} 已连接，正在接收 Data Collect 原始数据");
+            Publish(true, $"{portName} 已连接，正在接收 Dongle 采集态原始数据");
             while (!cancellationToken.IsCancellationRequested && port.IsOpen)
             {
                 try

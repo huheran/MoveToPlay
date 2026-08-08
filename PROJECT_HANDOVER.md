@@ -26,7 +26,7 @@ MoveToPlay 是一套基于 ESP32-S3 的多人穿戴式体感控制系统：四�
 - 固件大小：772,944 字节
 - App 分区：7 MB
 - 分区剩余约 89%
-- 唯一编译警告：`print_csv_header()` 未使用
+- 统一 Dongle 与 Blade Profile 均已在 ESP-IDF 5.5.2 下零警告构建
 - 全部 Python 脚本通过语法检查
 - 尚未进行实机通信、USB HID 和动作识别验证
 
@@ -365,21 +365,21 @@ Dongle 并不是识别出什么就立即发送什么，还加入了较多游戏�
 
 ## 10. Dongle 的三种模式
 
-由 `M2P_DONGLE_MODE` 决定：
+Dongle 现在只有一份统一固件。每次长按 GPIO4 两秒按顺序切换：
 
-| 模式 | 值 | 串口 | 推理 | USB HID | 用途 |
-|---|---:|---|---|---|---|
-| Serial View | 0 | 状态和调试日志 | 开启 | 关闭 | 看识别结果 |
-| Data Collect | 1 | 原始 CSV | 关闭 | 关闭 | 采集训练数据 |
-| Play | 2 | 少量状态日志 | 开启 | 开启 | 正式游戏 |
+| 运行状态 | 指示灯 | USB 数据 | 推理 | USB HID | 用途 |
+|---|---|---|---|---|---|
+| Play | 绿色 | 动作与设备状态 JSON | 开启 | 开启 | 正式游戏 |
+| Data Collect | 橙色 | 四节点原始六轴 CSV | 关闭 | 关闭 | 采集训练数据 |
+| Wi-Fi Maintenance | 蓝色 | 切换为 USB Serial/JTAG | 关闭 | 关闭 | 查看节点与修改配置 |
 
-当前宏为 `2`，但当前 Profile 是 Blade，所以这个值暂时不生效。
+切换顺序为 `Play → Data Collect → Wi-Fi Maintenance → 重启回 Play`。进入采集态前固件会释放所有按住的键盘和鼠标报告；Play 与采集态共用同一个 TinyUSB CDC 端口，因此切换采集不需要重新枚举 USB，也不需要重新烧录。
 
 ---
 
 ## 11. Wi-Fi 配置与维护模式
 
-Dongle 正常运行时，长按 GPIO4 四秒进入 Wi-Fi 模式：
+Dongle 在橙色采集态下再次长按 GPIO4 两秒进入 Wi-Fi 模式：
 
 - SSID：`MoveToPlay-Dongle`
 - 无密码
@@ -413,7 +413,7 @@ Dongle 正常运行时，长按 GPIO4 四秒进入 Wi-Fi 模式：
 - Key：`actions`
 - 配置版本：1
 
-再次长按 GPIO4 四秒会重启并退出 Wi-Fi 模式。
+再次长按 GPIO4 两秒会重启并回到绿色 Play 状态。
 
 HTTP 接口：
 
@@ -444,10 +444,11 @@ USB 模块模拟一个组合设备：
 
 USB 模式切换要特别注意：
 
-- Play 模式下电脑看到的是 HID 键盘和鼠标。
+- Play 状态下电脑看到 HID 键盘、鼠标和 CDC 串口。
+- Data Collect 状态沿用相同 CDC 串口输出原始 CSV，不重新枚举 USB。
 - 进入 Wi-Fi 维护模式后，TinyUSB 会被卸载，切换为 USB Serial/JTAG。
-- 想退出维护模式需要长按按钮重启。
-- 如果 Dongle 无法被正常识别，首先检查烧录的是否真的是 Profile 1 + Play 模式。
+- 想退出维护模式需要再次长按两秒，由固件重启回 Play。
+- 如果 Dongle 无法被正常识别，首先确认烧录的是 Profile 1 的统一 Dongle 固件。
 
 ---
 
@@ -532,16 +533,6 @@ idf.py -B build-dongle16mb `
   -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults.16mb" build
 ```
 
-16 MB 数据采集 Dongle：
-
-```powershell
-idf.py -B build-dongle-collect `
-  -D "SDKCONFIG=build-dongle-collect/sdkconfig" `
-  -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults.16mb" `
-  -D "M2P_BOARD_PROFILE=1" `
-  -D "M2P_DONGLE_MODE=1" build
-```
-
 默认 8 MB 分区：
 
 - NVS：24 KB
@@ -567,14 +558,14 @@ build/esp_idf_template.bin
 当前推荐链路：
 
 1. 将 Dongle 设为 Profile 1。
-2. 将 `M2P_DONGLE_MODE` 设为 Data Collect。
+2. 烧录统一 Dongle 固件；绿色 Play 下长按两秒，看到橙灯后进入采集态。
 3. 四个 Tracker 全部上线。
 4. 使用 Companion 的“数据采集与云端训练”窗口收集样本和事件标记；`collect_imu_events.py` 保留为命令行诊断工具。
 5. 按 40 ms 时间网格对齐四个节点。
 6. 使用 `train_event_rf.py` 分别训练状态模型和事件模型。
 7. 使用 `export_rf_model_c.py` 导出 C 数组。
-8. 重新编译 Dongle 固件。
-9. 用实机串口和 HID 行为验证。
+8. 将批准后的 C 数组集成并重新编译统一 Dongle 固件。
+9. 长按切回 Wi-Fi 后再长按重启至绿色 Play，用实机串口和 HID 行为验证。
 
 当前训练命令记录在 `tools/retrain_models.sh`。
 

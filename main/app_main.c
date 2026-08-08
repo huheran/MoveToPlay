@@ -33,10 +33,6 @@ static const char *TAG = "imu_main";
 #define MOVE_TO_PLAY_MODE_TRACKER     1
 #define MOVE_TO_PLAY_MODE_BLADE       2
 
-#define DONGLE_MODE_SERIAL_VIEW           0
-#define DONGLE_MODE_DATA_COLLECT          1
-#define DONGLE_MODE_PLAY                  2
-
 #define TRACKER_NODE_CHEST            1
 #define TRACKER_NODE_RIGHT_HAND       2
 #define TRACKER_NODE_LEFT_HAND        3
@@ -51,18 +47,13 @@ static const char *TAG = "imu_main";
 
 
 
-/* 烧录前只改这里。
+/* Board profile can be supplied by the build directory's CMake cache.
  * M2P_BOARD_PROFILE: 1=dongle, 2=blade, 3=chest, 4=right_hand, 5=left_hand, 6=leg
- * M2P_DONGLE_MODE:   0=view, 1=collect, 2=play
  * *_BOARD_STYLE:     0=current, 1=new
  */
 #ifndef M2P_BOARD_PROFILE
 #define M2P_BOARD_PROFILE             1
 #endif
-#ifndef M2P_DONGLE_MODE
-#define M2P_DONGLE_MODE               2
-#endif
-
 #define M2P_CHEST_BOARD_STYLE         1
 #define M2P_RIGHT_HAND_BOARD_STYLE    1
 #define M2P_LEFT_HAND_BOARD_STYLE     1
@@ -97,50 +88,14 @@ static const char *TAG = "imu_main";
 #error "M2P_BOARD_PROFILE must be 1(dongle), 2(blade), 3(chest), 4(right_hand), 5(left_hand), or 6(leg)"
 #endif
 
-#define DONGLE_DATA_COLLECT_MODE      M2P_DONGLE_MODE
 #define BOARD_NODE_ID                 MOVE_TO_PLAY_TRACKER_NODE_ID
 
 #define MOVE_TO_PLAY_ENABLE_ESPNOW        1
 #define MOVE_TO_PLAY_ESPNOW_SEND_SAMPLES  1
 
-#if (DONGLE_DATA_COLLECT_MODE != DONGLE_MODE_SERIAL_VIEW) && \
-    (DONGLE_DATA_COLLECT_MODE != DONGLE_MODE_DATA_COLLECT) && \
-    (DONGLE_DATA_COLLECT_MODE != DONGLE_MODE_PLAY)
-#error "DONGLE_DATA_COLLECT_MODE must be 0(serial), 1(collect), or 2(play)"
-#endif
-
-#if DONGLE_DATA_COLLECT_MODE == DONGLE_MODE_SERIAL_VIEW
+/* The Dongle always builds one unified firmware. Play, data collection and
+ * Wi-Fi maintenance are runtime states selected with the GPIO4 button. */
 #define DONGLE_ENABLE_SERIAL_OUTPUT       1
-#define DONGLE_ENABLE_RAW_CSV_OUTPUT      0
-#define DONGLE_ENABLE_SERIAL_AGE_COLUMN   1
-#define DONGLE_ENABLE_RF_INFERENCE        1
-#define DONGLE_USE_CNN_INFER              0
-#define DONGLE_ENABLE_HID_ACTION_LOG      1
-#define DONGLE_ENABLE_ACTION_DEBUG_OUTPUT 1
-#define DONGLE_ENABLE_HID_EVENT_LOG       1
-#define DONGLE_ENABLE_USB_KEYBOARD        0
-#define DONGLE_ENABLE_USB_MOUSE           0
-#define DONGLE_ENABLE_USB_TELEMETRY        0
-#define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
-#define DONGLE_ENABLE_USB_MOUSE_TEST      0
-#elif DONGLE_DATA_COLLECT_MODE == DONGLE_MODE_DATA_COLLECT
-#define DONGLE_ENABLE_SERIAL_OUTPUT       1
-#define DONGLE_ENABLE_RAW_CSV_OUTPUT      1
-#define DONGLE_ENABLE_SERIAL_AGE_COLUMN   1
-#define DONGLE_ENABLE_RF_INFERENCE        0
-#define DONGLE_USE_CNN_INFER              0
-#define DONGLE_ENABLE_HID_ACTION_LOG      0
-#define DONGLE_ENABLE_ACTION_DEBUG_OUTPUT 0
-#define DONGLE_ENABLE_HID_EVENT_LOG       0
-#define DONGLE_ENABLE_USB_KEYBOARD        0
-#define DONGLE_ENABLE_USB_MOUSE           0
-#define DONGLE_ENABLE_USB_TELEMETRY        0
-#define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
-#define DONGLE_ENABLE_USB_MOUSE_TEST      0
-#else
-#define DONGLE_ENABLE_SERIAL_OUTPUT       1
-#define DONGLE_ENABLE_RAW_CSV_OUTPUT      0
-#define DONGLE_ENABLE_SERIAL_AGE_COLUMN   1
 #define DONGLE_ENABLE_RF_INFERENCE        1
 #define DONGLE_USE_CNN_INFER              0
 #define DONGLE_ENABLE_HID_ACTION_LOG      1
@@ -151,7 +106,6 @@ static const char *TAG = "imu_main";
 #define DONGLE_ENABLE_USB_TELEMETRY        1
 #define DONGLE_ENABLE_USB_KEYBOARD_TEST   0
 #define DONGLE_ENABLE_USB_MOUSE_TEST      0
-#endif
 
 #include "move_to_play_board_config.h"
 
@@ -167,13 +121,22 @@ static const char *TAG = "imu_main";
 #define DONGLE_MAX_TRACKER_NODES      8
 #define DONGLE_WIFI_DISPLAY_GPIO      GPIO_NUM_4
 #define DONGLE_WIFI_DISPLAY_ACTIVE_LEVEL 0
-#define DONGLE_WIFI_DISPLAY_HOLD_MS   4000
+#define DONGLE_MODE_SWITCH_HOLD_MS    2000
 #define DONGLE_WIFI_DISPLAY_POLL_MS   50
 #define DONGLE_WIFI_DISPLAY_AP_SSID   "MoveToPlay-Dongle"
 #define DONGLE_WIFI_DISPLAY_AP_PASS   ""
 #define DONGLE_WIFI_DISPLAY_AP_MAX_CONN 2
 #define DONGLE_WIFI_DISPLAY_STATUS_UPDATE_MS 200
 #define DONGLE_WIFI_DISPLAY_RX_DRAIN_DELAY_MS 5
+#define DONGLE_PLAY_LED_R             0
+#define DONGLE_PLAY_LED_G             20
+#define DONGLE_PLAY_LED_B             0
+#define DONGLE_COLLECT_LED_R          20
+#define DONGLE_COLLECT_LED_G          8
+#define DONGLE_COLLECT_LED_B          0
+#define DONGLE_WIFI_LED_R             0
+#define DONGLE_WIFI_LED_G             0
+#define DONGLE_WIFI_LED_B             20
 #define DONGLE_STATUS_ONLINE_MAX_AGE_MS 1500
 #define DONGLE_RF_MAX_NODE_AGE_MS     250
 #define DONGLE_RF_PRINT_INTERVAL_MS   120
@@ -365,13 +328,6 @@ static esp_err_t spi_master_init(void)
     return spi_bus_initialize(IMU_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
 }
 
-static void print_csv_header(void)
-{
-    printf("# units: accel[g], gyro[dps]\n");
-    printf("# sample_rate_hz=%d, print_rate_hz=%d\n", IMU_SAMPLE_RATE_HZ, IMU_SAMPLE_RATE_HZ / IMU_PRINT_DECIMATION);
-    printf("ax,ay,az,gx,gy,gz\n");
-}
-
 static void imu_error_loop(void)
 {
     ESP_LOGE(TAG, "IMU init failed. Check wiring/power and SPI pins.");
@@ -472,8 +428,15 @@ typedef struct {
     uint8_t battery_percent;
 } dongle_blade_state_t;
 
+typedef enum {
+    DONGLE_RUNTIME_PLAY = 0,
+    DONGLE_RUNTIME_COLLECT = 1,
+    DONGLE_RUNTIME_WIFI = 2,
+} dongle_runtime_mode_t;
+
 static dongle_latest_node_t s_dongle_latest_nodes[DONGLE_MAX_TRACKER_NODES];
 static dongle_blade_state_t s_dongle_blade_state;
+static volatile dongle_runtime_mode_t s_dongle_runtime_mode = DONGLE_RUNTIME_PLAY;
 static SemaphoreHandle_t s_dongle_state_mutex;
 #if DONGLE_ENABLE_USB_KEYBOARD || DONGLE_ENABLE_USB_MOUSE
 static SemaphoreHandle_t s_dongle_hid_mutex;
@@ -812,8 +775,7 @@ static void dongle_handle_blade_turn(int64_t now_us)
 #endif
 }
 
-#if DONGLE_ENABLE_RAW_CSV_OUTPUT
-static void dongle_print_latest_node(dongle_latest_node_t *node, int64_t now_us)
+static void dongle_send_latest_node_csv(dongle_latest_node_t *node, int64_t now_us)
 {
     const m2p_espnow_tracker_packet_t *packet = &node->packet;
     double age_ms = 0.0;
@@ -824,47 +786,43 @@ static void dongle_print_latest_node(dongle_latest_node_t *node, int64_t now_us)
     /* Plain CSV for PC-side collection tools:
      * timestamp_ms,node_id,ax,ay,az,gx,gy,gz[,age_ms]
      */
-#if DONGLE_ENABLE_SERIAL_AGE_COLUMN
-    printf("%" PRIu32 ",%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.1f\n",
-           packet->timestamp_us / 1000U,
-           packet->node_id,
-           (double)packet->accel_g[0],
-           (double)packet->accel_g[1],
-           (double)packet->accel_g[2],
-           (double)packet->gyro_dps[0],
-           (double)packet->gyro_dps[1],
-           (double)packet->gyro_dps[2],
-           age_ms);
-#else
-    printf("%" PRIu32 ",%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
-           packet->timestamp_us / 1000U,
-           packet->node_id,
-           (double)packet->accel_g[0],
-           (double)packet->accel_g[1],
-           (double)packet->accel_g[2],
-           (double)packet->gyro_dps[0],
-           (double)packet->gyro_dps[1],
-           (double)packet->gyro_dps[2]);
-#endif
-
-    node->dirty = false;
+    char line[192];
+    const int written = snprintf(line,
+                                 sizeof(line),
+                                 "%" PRIu32 ",%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.1f\n",
+                                 packet->timestamp_us / 1000U,
+                                 packet->node_id,
+                                 (double)packet->accel_g[0],
+                                 (double)packet->accel_g[1],
+                                 (double)packet->accel_g[2],
+                                 (double)packet->gyro_dps[0],
+                                 (double)packet->gyro_dps[1],
+                                 (double)packet->gyro_dps[2],
+                                 age_ms);
+    if (written > 0 && written < (int)sizeof(line) &&
+        usb_telemetry_write_line(line) == ESP_OK) {
+        node->dirty = false;
+    }
 }
-#endif
+
+static void dongle_send_latest_nodes_csv(int64_t now_us)
+{
+    if (!usb_telemetry_is_ready()) {
+        return;
+    }
+    for (size_t i = 0; i < DONGLE_MAX_TRACKER_NODES; i++) {
+        dongle_latest_node_t *node = &s_dongle_latest_nodes[i];
+        if (node->valid && node->dirty) {
+            dongle_send_latest_node_csv(node, now_us);
+        }
+    }
+}
 
 static void dongle_print_latest_states(void)
 {
     const int64_t now_us = esp_timer_get_time();
 
-#if DONGLE_ENABLE_RAW_CSV_OUTPUT
-    for (size_t i = 0; i < DONGLE_MAX_TRACKER_NODES; i++) {
-        dongle_latest_node_t *node = &s_dongle_latest_nodes[i];
-        if (node->valid && node->dirty) {
-            dongle_print_latest_node(node, now_us);
-        }
-    }
-#else
     dongle_print_blade_state_if_changed(now_us);
-#endif
 
     dongle_handle_blade_turn(now_us);
 }
@@ -2575,7 +2533,7 @@ static void dongle_telemetry_maybe_send(int64_t now_us)
         line,
         sizeof(line),
         "{\"v\":1,\"source\":\"MoveToPlay-Dongle\",\"seq\":%" PRIu32
-        ",\"time_ms\":%" PRIu64 ",\"type\":\"state\",\"action_id\":%u"
+        ",\"time_ms\":%" PRIu64 ",\"type\":\"state\",\"runtime_mode\":\"play\",\"action_id\":%u"
         ",\"action\":\"%s\",\"confidence\":%u,\"intensity\":%u,\"active\":%s"
         ",\"event_count\":%" PRIu32 ",\"event_action\":\"%s\",\"event\":\"%s\""
         ",\"tracker_mask\":%u,\"tracker_online\":%u,\"quality\":%u"
@@ -3276,6 +3234,9 @@ static esp_err_t dongle_wifi_display_start(void)
     }
 #endif
 
+    (void)usb_telemetry_write_line(
+        "{\"v\":1,\"source\":\"MoveToPlay-Dongle\",\"type\":\"mode\",\"mode\":\"wifi\"}\n");
+    vTaskDelay(pdMS_TO_TICKS(20));
     s_dongle_wifi_display_active = true;
 
 #if DONGLE_ENABLE_RF_INFERENCE && DONGLE_ENABLE_HID_ACTION_LOG
@@ -3294,7 +3255,8 @@ static esp_err_t dongle_wifi_display_start(void)
     }
 #endif
 
-    status_led_set_color(0, 0, 20);
+    s_dongle_runtime_mode = DONGLE_RUNTIME_WIFI;
+    status_led_set_color(DONGLE_WIFI_LED_R, DONGLE_WIFI_LED_G, DONGLE_WIFI_LED_B);
     ESP_LOGI(TAG,
              "Wi-Fi display mode ready: ssid=%s url=http://192.168.4.1/",
              DONGLE_WIFI_DISPLAY_AP_SSID);
@@ -3305,6 +3267,69 @@ static esp_err_t dongle_wifi_display_start(void)
     printf("# dongle-wifi-display: ssid=%s url=http://192.168.4.1/\n",
            DONGLE_WIFI_DISPLAY_AP_SSID);
     return ESP_OK;
+}
+
+static esp_err_t dongle_enter_collect_mode(void)
+{
+    if (s_dongle_runtime_mode != DONGLE_RUNTIME_PLAY || s_dongle_wifi_display_active) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+#if DONGLE_ENABLE_USB_KEYBOARD || DONGLE_ENABLE_USB_MOUSE
+    if (s_dongle_hid_mutex != NULL) {
+        (void)xSemaphoreTake(s_dongle_hid_mutex, portMAX_DELAY);
+    }
+#endif
+
+#if DONGLE_ENABLE_RF_INFERENCE && DONGLE_ENABLE_HID_ACTION_LOG
+    dongle_release_hold_actions();
+#endif
+#if DONGLE_ENABLE_USB_KEYBOARD
+    (void)usb_keyboard_release();
+#endif
+#if DONGLE_ENABLE_USB_MOUSE
+    (void)usb_mouse_release_buttons();
+#endif
+    s_dongle_runtime_mode = DONGLE_RUNTIME_COLLECT;
+
+#if DONGLE_ENABLE_USB_KEYBOARD || DONGLE_ENABLE_USB_MOUSE
+    if (s_dongle_hid_mutex != NULL) {
+        (void)xSemaphoreGive(s_dongle_hid_mutex);
+    }
+#endif
+
+    dongle_state_lock();
+    for (size_t i = 0; i < DONGLE_MAX_TRACKER_NODES; i++) {
+        if (s_dongle_latest_nodes[i].valid) {
+            s_dongle_latest_nodes[i].dirty = true;
+        }
+    }
+    dongle_state_unlock();
+
+    status_led_set_color(DONGLE_COLLECT_LED_R,
+                         DONGLE_COLLECT_LED_G,
+                         DONGLE_COLLECT_LED_B);
+    (void)usb_telemetry_write_line(
+        "{\"v\":1,\"source\":\"MoveToPlay-Dongle\",\"type\":\"mode\",\"mode\":\"collect\"}\n");
+    ESP_LOGI(TAG, "Runtime mode changed: play -> collect; RF/HID paused, raw CSV over USB CDC");
+    return ESP_OK;
+}
+
+static esp_err_t dongle_advance_runtime_mode(void)
+{
+    switch (s_dongle_runtime_mode) {
+    case DONGLE_RUNTIME_PLAY:
+        return dongle_enter_collect_mode();
+    case DONGLE_RUNTIME_COLLECT:
+        return dongle_wifi_display_start();
+    case DONGLE_RUNTIME_WIFI:
+        ESP_LOGI(TAG, "Runtime mode changed: wifi -> play; restarting Dongle");
+        vTaskDelay(pdMS_TO_TICKS(100));
+        esp_restart();
+        return ESP_OK;
+    default:
+        return ESP_ERR_INVALID_STATE;
+    }
 }
 
 static esp_err_t dongle_wifi_display_button_init(void)
@@ -3320,13 +3345,13 @@ static esp_err_t dongle_wifi_display_button_init(void)
     return gpio_config(&io_conf);
 }
 
-static void dongle_wifi_display_button_task(void *arg)
+static void dongle_mode_button_task(void *arg)
 {
     (void)arg;
 
     esp_err_t err = dongle_wifi_display_button_init();
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "GPIO%d Wi-Fi display trigger init failed: %s",
+        ESP_LOGW(TAG, "GPIO%d runtime mode trigger init failed: %s",
                  DONGLE_WIFI_DISPLAY_GPIO,
                  esp_err_to_name(err));
         vTaskDelete(NULL);
@@ -3334,10 +3359,10 @@ static void dongle_wifi_display_button_task(void *arg)
     }
 
     ESP_LOGI(TAG,
-             "Hold GPIO%d at level %d for %d ms to enter Wi-Fi display mode; hold again to restart and exit",
+             "Hold GPIO%d at level %d for %d ms to cycle play -> collect -> wifi -> play",
              DONGLE_WIFI_DISPLAY_GPIO,
              DONGLE_WIFI_DISPLAY_ACTIVE_LEVEL,
-             DONGLE_WIFI_DISPLAY_HOLD_MS);
+             DONGLE_MODE_SWITCH_HOLD_MS);
 
     bool pressed = false;
     bool ready_for_press =
@@ -3346,7 +3371,7 @@ static void dongle_wifi_display_button_task(void *arg)
 
     if (!ready_for_press) {
         ESP_LOGW(TAG,
-                 "GPIO%d is already at active level %d at boot; release it before Wi-Fi display trigger is armed",
+                 "GPIO%d is already at active level %d at boot; release it before runtime mode switching is armed",
                  DONGLE_WIFI_DISPLAY_GPIO,
                  DONGLE_WIFI_DISPLAY_ACTIVE_LEVEL);
     }
@@ -3360,7 +3385,7 @@ static void dongle_wifi_display_button_task(void *arg)
             if (!now_pressed) {
                 ready_for_press = true;
                 ESP_LOGI(TAG,
-                         "GPIO%d released to level %d; Wi-Fi display trigger armed",
+                         "GPIO%d released to level %d; runtime mode trigger armed",
                          DONGLE_WIFI_DISPLAY_GPIO,
                          gpio_level);
             }
@@ -3381,23 +3406,18 @@ static void dongle_wifi_display_button_task(void *arg)
 
         if (pressed) {
             const uint32_t held_ms = (uint32_t)((now_tick - press_start_tick) * portTICK_PERIOD_MS);
-            if (held_ms >= DONGLE_WIFI_DISPLAY_HOLD_MS) {
-                if (s_dongle_wifi_display_active) {
-                    ESP_LOGI(TAG, "GPIO%d held for %u ms in Wi-Fi display mode; restarting to exit",
-                             DONGLE_WIFI_DISPLAY_GPIO,
-                             (unsigned)held_ms);
-                    vTaskDelay(pdMS_TO_TICKS(100));
-                    esp_restart();
-                } else {
-                    err = dongle_wifi_display_start();
-                    if (err == ESP_OK) {
-                        pressed = false;
-                        ready_for_press = false;
-                        ESP_LOGI(TAG,
-                                 "Release GPIO%d before holding again to restart and exit Wi-Fi display mode",
-                                 DONGLE_WIFI_DISPLAY_GPIO);
-                    }
+            if (held_ms >= DONGLE_MODE_SWITCH_HOLD_MS) {
+                const dongle_runtime_mode_t previous_mode = s_dongle_runtime_mode;
+                err = dongle_advance_runtime_mode();
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG,
+                             "Runtime mode switch from %d failed: %s",
+                             previous_mode,
+                             esp_err_to_name(err));
                 }
+                pressed = false;
+                ready_for_press = false;
+                ESP_LOGI(TAG, "Release GPIO%d before the next two-second mode switch", DONGLE_WIFI_DISPLAY_GPIO);
                 press_start_tick = now_tick;
             }
         }
@@ -3462,13 +3482,18 @@ static void espnow_rx_task(void *arg)
             }
 #endif
             if (!s_dongle_wifi_display_active) {
-                dongle_print_latest_states();
+                const dongle_runtime_mode_t runtime_mode = s_dongle_runtime_mode;
+                if (runtime_mode == DONGLE_RUNTIME_PLAY) {
+                    dongle_print_latest_states();
 #if DONGLE_ENABLE_RF_INFERENCE
-                dongle_run_rf_inference(esp_timer_get_time());
+                    dongle_run_rf_inference(esp_timer_get_time());
 #endif
 #if DONGLE_ENABLE_USB_TELEMETRY
-                dongle_telemetry_maybe_send(esp_timer_get_time());
+                    dongle_telemetry_maybe_send(esp_timer_get_time());
 #endif
+                } else if (runtime_mode == DONGLE_RUNTIME_COLLECT) {
+                    dongle_send_latest_nodes_csv(esp_timer_get_time());
+                }
             }
 #if DONGLE_ENABLE_USB_KEYBOARD || DONGLE_ENABLE_USB_MOUSE
             if (s_dongle_hid_mutex != NULL) {
@@ -3968,18 +3993,20 @@ static void start_dongle_mode(void)
     ESP_LOGI(TAG, "Starting dongle mode");
     ESP_LOGI(TAG, "role: receive tracker data");
     ESP_LOGI(TAG, "esp-now channel=%d", M2P_ESPNOW_CHANNEL);
+    ESP_LOGI(TAG, "unified runtime modes: play -> collect -> wifi; hold GPIO%d for %d ms",
+             DONGLE_WIFI_DISPLAY_GPIO,
+             DONGLE_MODE_SWITCH_HOLD_MS);
     ESP_LOGI(TAG, "serial output=%d", DONGLE_ENABLE_SERIAL_OUTPUT);
 #if DONGLE_ENABLE_SERIAL_OUTPUT
     ESP_LOGI(TAG, "serial latest-state rate=%d Hz", DONGLE_SERIAL_STATE_RATE_HZ);
-    ESP_LOGI(TAG, "raw csv output=%d", DONGLE_ENABLE_RAW_CSV_OUTPUT);
-    ESP_LOGI(TAG, "serial age column=%d", DONGLE_ENABLE_SERIAL_AGE_COLUMN);
     ESP_LOGI(TAG, "rf inference=%d", DONGLE_ENABLE_RF_INFERENCE);
 #endif
     ESP_LOGI(TAG, "usb keyboard=%d", DONGLE_ENABLE_USB_KEYBOARD);
     ESP_LOGI(TAG, "usb mouse=%d", DONGLE_ENABLE_USB_MOUSE);
     ESP_LOGI(TAG, "usb cdc telemetry=%d", DONGLE_ENABLE_USB_TELEMETRY);
 
-    led_set(true);
+    s_dongle_runtime_mode = DONGLE_RUNTIME_PLAY;
+    status_led_set_color(DONGLE_PLAY_LED_R, DONGLE_PLAY_LED_G, DONGLE_PLAY_LED_B);
 
 #if DONGLE_ENABLE_SERIAL_OUTPUT
     if (s_dongle_state_mutex == NULL) {
@@ -4021,8 +4048,8 @@ static void start_dongle_mode(void)
                             tskNO_AFFINITY);
 
 #if DONGLE_ENABLE_SERIAL_OUTPUT
-    xTaskCreatePinnedToCore(dongle_wifi_display_button_task,
-                            "dongle_wifi_btn",
+    xTaskCreatePinnedToCore(dongle_mode_button_task,
+                            "dongle_mode_btn",
                             3072,
                             NULL,
                             4,
