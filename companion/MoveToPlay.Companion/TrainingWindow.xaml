@@ -61,7 +61,7 @@
             <StackPanel>
                 <TextBlock FontSize="23" FontWeight="Bold" Text="数据采集与云端训练" />
                 <TextBlock Margin="0,6,0,0" Foreground="#FF8291A7"
-                           Text="Dongle Data Collect → 标注 CSV → SSH 安全上传 → 双随机森林 → C 数组" />
+                           Text="Dongle 采集态 → 标注 CSV → SSH 安全上传 → 双随机森林 → C 数组" />
             </StackPanel>
             <Border Grid.Column="1" Padding="13,7" Background="#FF111925" CornerRadius="999" VerticalAlignment="Center">
                 <StackPanel Orientation="Horizontal">
@@ -83,7 +83,7 @@
                         <StackPanel>
                             <TextBlock FontSize="16" FontWeight="SemiBold" Text="采集会话" />
                             <TextBlock Margin="0,7,0,17" Foreground="#FF8291A7" TextWrapping="Wrap"
-                                       Text="请给 Dongle 烧录 Data Collect 模式。软件会读取原始六轴数据，并实时生成训练所需 CSV。" />
+                                       Text="保持统一 Dongle 固件，长按 Dongle 按钮 2 秒至橙灯进入采集态。软件会读取原始六轴数据并生成训练 CSV。" />
                             <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="Dongle 串口" />
                             <Grid>
                                 <Grid.ColumnDefinitions>

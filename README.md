@@ -54,11 +54,11 @@ idf.py -B build-dongle16mb -D "SDKCONFIG=build-dongle16mb/sdkconfig" -D "SDKCONF
 idf.py -B build-dongle16mb -p COMx flash monitor
 ```
 
-切换板子前仍需要在 `main/app_main.c` 顶部修改 `M2P_BOARD_PROFILE` 和 `M2P_DONGLE_MODE`。
+板子 Profile 通过构建目录的 `M2P_BOARD_PROFILE` CMake 参数指定。Dongle 只有一份统一固件，长按 GPIO4 两秒在 Play、数据采集和 Wi-Fi 维护三个运行状态间循环。
 
 ## Dongle Wi-Fi 配置页
 
-dongle 进入 Wi-Fi display mode 后，连接 `MoveToPlay-Dongle`，打开 `http://192.168.4.1/`。
+Dongle 橙灯采集态下再长按 GPIO4 两秒进入蓝灯 Wi-Fi display mode；连接 `MoveToPlay-Dongle`，打开 `http://192.168.4.1/`。
 
 页面上方会实时显示 tracker 在线状态和电量；页面下方的 Controls 表格可以修改每个识别动作对应的输出、按键、修饰键、触发方式、置信度阈值、冷却时间和持续帧数。保存后配置会写入 dongle NVS，重启或退出 Wi-Fi display mode 后继续生效。恢复默认值可以点 `Reset defaults`。
 
