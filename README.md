@@ -54,7 +54,7 @@ idf.py -B build-dongle16mb -D "SDKCONFIG=build-dongle16mb/sdkconfig" -D "SDKCONF
 idf.py -B build-dongle16mb -p COMx flash monitor
 ```
 
-板子 Profile 通过构建目录的 `M2P_BOARD_PROFILE` CMake 参数指定。Dongle 只有一份统一固件，长按 GPIO4 两秒在 Play、数据采集和 Wi-Fi 维护三个运行状态间循环。
+使用 VS Code 的 ESP-IDF 按钮编译和烧录前，直接修改 `main/app_main.c` 顶部的 `M2P_BOARD_PROFILE`：`1`=Dongle、`2`=Blade、`3`=胸部、`4`=右手、`5`=左手、`6`=腿部。Dongle 只有一份统一固件，长按 GPIO4 两秒在 Play、数据采集和 Wi-Fi 维护三个运行状态间循环。
 
 橙色采集态会给每条 Tracker 数据附加 Dongle 接收时间，并把 Blade 的“松开→按下”边沿作为独立事件发送到同一个 CDC 串口。Companion 支持预选或新增动作事件、Blade 即时标记、倒计时提示音和延迟补偿；同一次长按只记录一个事件。
 

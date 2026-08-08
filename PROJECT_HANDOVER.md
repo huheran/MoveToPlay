@@ -513,7 +513,7 @@ Tracker LED：
 标准流程：
 
 ```powershell
-# Profile 现在可以通过独立构建目录的 CMake 参数指定，不再手改 app_main.c
+# 先在 main/app_main.c 中修改 M2P_BOARD_PROFILE，再使用 VS Code ESP-IDF 按钮或以下命令
 
 idf.py build
 idf.py -p COMx flash monitor
@@ -623,9 +623,9 @@ torch
 
 #### 1. 编译角色依靠手工修改源码
 
-每烧一块板都要改 `M2P_BOARD_PROFILE`，非常容易把 Blade、Tracker 或 Dongle 固件烧错，也会长期产生脏工作区。
+当前为了适配实际烧录习惯，仍在 `main/app_main.c` 中手工修改 `M2P_BOARD_PROFILE`，然后使用 VS Code ESP-IDF 按钮编译、烧录。烧录前必须再次核对编号，避免把 Blade、Tracker 或 Dongle 固件烧错；切换回常用板子后也应及时恢复该值。
 
-建议改成 Kconfig、CMake 参数或独立构建预设。
+如果未来改为自动化构建矩阵，应同时提供 VS Code 中清晰可见的板子选择入口，不能只把选择方式隐藏到 CMake 参数中。
 
 #### 2. 缺少完整构建矩阵
 

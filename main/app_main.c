@@ -47,13 +47,11 @@ static const char *TAG = "imu_main";
 
 
 
-/* Board profile can be supplied by the build directory's CMake cache.
+/* Edit this value before clicking the VS Code ESP-IDF build/flash buttons.
  * M2P_BOARD_PROFILE: 1=dongle, 2=blade, 3=chest, 4=right_hand, 5=left_hand, 6=leg
  * *_BOARD_STYLE:     0=current, 1=new
  */
-#ifndef M2P_BOARD_PROFILE
 #define M2P_BOARD_PROFILE             1
-#endif
 #define M2P_CHEST_BOARD_STYLE         1
 #define M2P_RIGHT_HAND_BOARD_STYLE    1
 #define M2P_LEFT_HAND_BOARD_STYLE     1
