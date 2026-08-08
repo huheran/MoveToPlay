@@ -150,6 +150,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="MoveToPlay training worker")
     parser.add_argument("--once", action="store_true", help="Process at most one queued job")
     args = parser.parse_args()
+    os.umask(0o077)
     settings = Settings.from_env()
     settings.ensure_directories()
     database = Database(settings.database_path)

@@ -78,6 +78,7 @@ class Database:
                 connection.execute(
                     "ALTER TABLE datasets ADD COLUMN event_id_scope TEXT NOT NULL DEFAULT 'global'"
                 )
+        self.path.chmod(0o600)
 
     @staticmethod
     def _row(row: sqlite3.Row | None) -> dict[str, Any] | None:

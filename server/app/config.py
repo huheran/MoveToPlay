@@ -31,5 +31,9 @@ class Settings:
         return self.storage_root / "state" / "movetoplay.sqlite3"
 
     def ensure_directories(self) -> None:
+        self.storage_root.mkdir(parents=True, exist_ok=True)
+        self.storage_root.chmod(0o700)
         for name in ("state", "datasets", "jobs", "artifacts"):
-            (self.storage_root / name).mkdir(parents=True, exist_ok=True)
+            path = self.storage_root / name
+            path.mkdir(parents=True, exist_ok=True, mode=0o700)
+            path.chmod(0o700)
