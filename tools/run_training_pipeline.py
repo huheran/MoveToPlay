@@ -296,10 +296,11 @@ def safe_git_value(*args: str) -> str | None:
 
 def source_control_metadata() -> dict[str, Any]:
     status = safe_git_value("status", "--porcelain")
+    packaged_commit = os.getenv("MOVETOPLAY_SOURCE_COMMIT")
     return {
-        "commit": safe_git_value("rev-parse", "HEAD"),
-        "branch": safe_git_value("branch", "--show-current"),
-        "dirty": bool(status) if status is not None else None,
+        "commit": safe_git_value("rev-parse", "HEAD") or packaged_commit,
+        "branch": safe_git_value("branch", "--show-current") or ("packaged-release" if packaged_commit else None),
+        "dirty": bool(status) if status is not None else (False if packaged_commit else None),
         "status": status.splitlines() if status else [],
     }
 
@@ -415,7 +416,9 @@ def artifact_hashes(run_dir: Path) -> list[dict[str, Any]]:
 
 def make_run_id() -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    commit = safe_git_value("rev-parse", "--short=8", "HEAD") or "nogit"
+    commit = safe_git_value("rev-parse", "--short=8", "HEAD")
+    if not commit:
+        commit = (os.getenv("MOVETOPLAY_SOURCE_COMMIT") or "nogit")[:8]
     return f"{timestamp}-{commit}"
 
 

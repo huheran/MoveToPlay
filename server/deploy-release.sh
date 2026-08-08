@@ -35,8 +35,8 @@ if [[ ! -f "${RELEASE_DIR}/server/compose.yaml" ]]; then
   exit 1
 fi
 
-ln -sfn "${RELEASE_DIR}" "${APP_ROOT}/current"
-cd "${APP_ROOT}/current/server"
+cd "${RELEASE_DIR}/server"
+export MOVETOPLAY_SOURCE_COMMIT="${RELEASE_ID}"
 
 if docker compose version >/dev/null 2>&1; then
   docker compose up -d --build
@@ -46,4 +46,5 @@ else
   docker-compose ps
 fi
 
+ln -sfn "${RELEASE_DIR}" "${APP_ROOT}/current"
 echo "部署完成：${RELEASE_ID}"
