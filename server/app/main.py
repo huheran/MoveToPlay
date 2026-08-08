@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import secrets
 import shutil
 import uuid
@@ -79,6 +80,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        os.umask(0o077)
         active_settings.ensure_directories()
         database = Database(active_settings.database_path)
         database.initialize()
