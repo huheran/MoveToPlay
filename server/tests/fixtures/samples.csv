@@ -1,0 +1,5 @@
+pc_timestamp_ms,board_timestamp_ms,node_id,ax,ay,az,gx,gy,gz,state_label,session_id
+1000,10,1,0.1,0.2,0.3,1,2,3,idle,test_session
+1001,11,2,0.1,0.2,0.3,1,2,3,idle,test_session
+1002,12,3,0.1,0.2,0.3,1,2,3,idle,test_session
+1003,13,4,0.1,0.2,0.3,1,2,3,idle,test_session

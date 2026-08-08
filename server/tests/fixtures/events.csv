@@ -1,0 +1,2 @@
+event_id,event_group,event_type,pc_timestamp_ms,state_label,session_id
+event-0001,jump_event,jump,1002,idle,test_session

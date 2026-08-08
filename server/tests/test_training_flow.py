@@ -13,8 +13,9 @@ from app.worker import run_one
 
 
 TOKEN_HEADER = {"Authorization": "Bearer test-token"}
-SAMPLES = b"""pc_timestamp_ms,board_timestamp_ms,node_id,ax,ay,az,gx,gy,gz,state_label,session_id\n1000,10,1,0.1,0.2,0.3,1,2,3,idle,test_session\n1001,11,2,0.1,0.2,0.3,1,2,3,idle,test_session\n1002,12,3,0.1,0.2,0.3,1,2,3,idle,test_session\n1003,13,4,0.1,0.2,0.3,1,2,3,idle,test_session\n"""
-EVENTS = b"""event_id,event_group,event_type,pc_timestamp_ms,state_label,session_id\nevent-0001,jump_event,jump,1002,idle,test_session\n"""
+FIXTURE_ROOT = Path(__file__).parent / "fixtures"
+SAMPLES = (FIXTURE_ROOT / "samples.csv").read_bytes()
+EVENTS = (FIXTURE_ROOT / "events.csv").read_bytes()
 
 
 def sha256(value: bytes) -> str:
