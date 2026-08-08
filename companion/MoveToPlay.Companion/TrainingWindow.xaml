@@ -1,0 +1,218 @@
+<Window x:Class="MoveToPlay.Companion.TrainingWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="MoveToPlay · 数据采集与云端训练"
+        Width="1180" Height="800" MinWidth="1040" MinHeight="720"
+        WindowStartupLocation="CenterOwner" Background="#FF080D15"
+        FontFamily="{StaticResource AppFont}">
+    <Window.Resources>
+        <Style TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#FFE7EDF7" />
+        </Style>
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="Background" Value="#FF111925" />
+            <Setter Property="BorderBrush" Value="#FF263246" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="14" />
+            <Setter Property="Padding" Value="18" />
+        </Style>
+        <Style TargetType="Button">
+            <Setter Property="MinHeight" Value="34" />
+            <Setter Property="Padding" Value="13,5" />
+            <Setter Property="Margin" Value="0,0,8,8" />
+            <Setter Property="Background" Value="#FF233149" />
+            <Setter Property="Foreground" Value="#FFF2F6FC" />
+            <Setter Property="BorderBrush" Value="#FF354660" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style x:Key="Primary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="#FF2DD4BF" />
+            <Setter Property="Foreground" Value="#FF06131A" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style TargetType="ComboBox">
+            <Setter Property="MinHeight" Value="34" />
+            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="Background" Value="#FF0B121E" />
+            <Setter Property="Foreground" Value="#FF172033" />
+            <Setter Property="BorderBrush" Value="#FF64748B" />
+        </Style>
+        <Style TargetType="TextBox">
+            <Setter Property="MinHeight" Value="34" />
+            <Setter Property="Padding" Value="9,6" />
+            <Setter Property="Background" Value="#FF0B121E" />
+            <Setter Property="Foreground" Value="#FFF2F6FC" />
+            <Setter Property="BorderBrush" Value="#FF354660" />
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="16" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock FontSize="23" FontWeight="Bold" Text="数据采集与云端训练" />
+                <TextBlock Margin="0,6,0,0" Foreground="#FF8291A7"
+                           Text="Dongle Data Collect → 标注 CSV → SSH 安全上传 → 双随机森林 → C 数组" />
+            </StackPanel>
+            <Border Grid.Column="1" Padding="13,7" Background="#FF111925" CornerRadius="999" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal">
+                    <Ellipse x:Name="CloudStatusDot" Width="8" Height="8" Margin="0,0,8,0" Fill="#FF64748B" />
+                    <TextBlock x:Name="CloudStatusText" FontSize="11" Text="云端未连接" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <TabControl x:Name="TrainingTabs" Grid.Row="2" Background="Transparent" BorderThickness="0" Foreground="#FFF1F5F9">
+            <TabItem Header="  1. 采集与标注  ">
+                <Grid Margin="0,14,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="0.9*" />
+                        <ColumnDefinition Width="16" />
+                        <ColumnDefinition Width="1.1*" />
+                    </Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock FontSize="16" FontWeight="SemiBold" Text="采集会话" />
+                            <TextBlock Margin="0,7,0,17" Foreground="#FF8291A7" TextWrapping="Wrap"
+                                       Text="请给 Dongle 烧录 Data Collect 模式。软件会读取原始六轴数据，并实时生成训练所需 CSV。" />
+                            <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="Dongle 串口" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ComboBox x:Name="PortSelector" />
+                                <Button Grid.Column="1" Margin="9,0,0,0" Content="刷新" Click="RefreshPorts_Click" />
+                            </Grid>
+                            <TextBlock Margin="0,15,0,6" Foreground="#FF93A3B8" Text="连续状态标签" />
+                            <ComboBox x:Name="StateLabelSelector" SelectionChanged="StateLabelSelector_SelectionChanged" />
+                            <TextBlock Margin="0,15,0,6" Foreground="#FF93A3B8" Text="采集保存位置" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="CollectionRootText" IsReadOnly="True" />
+                                <Button Grid.Column="1" Margin="9,0,0,0" Content="选择" Click="ChooseCollectionRoot_Click" />
+                            </Grid>
+                            <StackPanel Margin="0,20,0,0" Orientation="Horizontal">
+                                <Button x:Name="StartCollectionButton" Style="{StaticResource Primary}" Content="开始采集" Click="StartCollection_Click" />
+                                <Button x:Name="StopCollectionButton" IsEnabled="False" Content="停止并保存" Click="StopCollection_Click" />
+                            </StackPanel>
+                            <Border Margin="0,10,0,0" Padding="13" Background="#FF0A111C" CornerRadius="10">
+                                <StackPanel>
+                                    <TextBlock x:Name="CollectionStatusText" Text="等待开始" TextWrapping="Wrap" />
+                                    <TextBlock x:Name="SampleCountText" Margin="0,7,0,0" FontFamily="Consolas"
+                                               Foreground="#FF2DD4BF" Text="样本 0 · 节点 —" />
+                                    <TextBlock x:Name="CollectionFilesText" Margin="0,7,0,0" FontSize="10"
+                                               Foreground="#FF718096" Text="尚未生成文件" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Column="2" Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock FontSize="16" FontWeight="SemiBold" Text="动作事件标记" />
+                            <TextBlock Margin="0,7,0,17" Foreground="#FF8291A7" TextWrapping="Wrap"
+                                       Text="动作做到最明显的位置时按一次对应按钮。每种动作建议分多轮采集，动作前后各保留约 2 秒。" />
+                            <UniformGrid x:Name="EventButtonPanel" Columns="2" />
+                            <Border Margin="0,14,0,0" Padding="14" Background="#172DD4BF" BorderBrush="#552DD4BF"
+                                    BorderThickness="1" CornerRadius="10">
+                                <TextBlock Foreground="#FF9BE7DB" TextWrapping="Wrap"
+                                           Text="采集建议：先录 idle / walk / run / move_noise 等连续状态，再逐个录制事件动作。每次切换标签后停顿一秒再开始动作。" />
+                            </Border>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="  2. 云端训练  ">
+                <Grid Margin="0,14,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="0.95*" />
+                        <ColumnDefinition Width="16" />
+                        <ColumnDefinition Width="1.05*" />
+                    </Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock FontSize="16" FontWeight="SemiBold" Text="数据集与连接" />
+                            <TextBlock Margin="0,7,0,16" Foreground="#FF8291A7" TextWrapping="Wrap"
+                                       Text="无需域名。软件使用 SSH 配置 movetoplay-server 建立加密隧道，训练 API 仍只监听服务器本机。" />
+                            <Button x:Name="ConnectCloudButton" Style="{StaticResource Primary}" HorizontalAlignment="Left"
+                                    Content="连接阿里云服务器" Click="ConnectCloud_Click" />
+                            <TextBlock Margin="0,14,0,6" Foreground="#FF93A3B8" Text="samples.csv" />
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <TextBox x:Name="SamplesPathText" IsReadOnly="True" />
+                                <Button Grid.Column="1" Margin="9,0,0,0" Content="选择" Click="ChooseSamples_Click" />
+                            </Grid>
+                            <TextBlock Margin="0,12,0,6" Foreground="#FF93A3B8" Text="events.csv" />
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <TextBox x:Name="EventsPathText" IsReadOnly="True" />
+                                <Button Grid.Column="1" Margin="9,0,0,0" Content="选择" Click="ChooseEvents_Click" />
+                            </Grid>
+                            <TextBlock Margin="0,12,0,6" Foreground="#FF93A3B8" Text="数据集名称" />
+                            <TextBox x:Name="DatasetNameText" Text="决赛演示采集" />
+                            <StackPanel Margin="0,18,0,0" Orientation="Horizontal">
+                                <Button x:Name="TrainButton" Style="{StaticResource Primary}" IsEnabled="False"
+                                        Content="上传并开始训练" Click="Train_Click" />
+                                <Button x:Name="CancelTaskButton" IsEnabled="False" Content="停止等待" Click="CancelTask_Click" />
+                            </StackPanel>
+                            <ProgressBar x:Name="UploadProgress" Margin="0,7,0,0" Height="8" Minimum="0" Maximum="100" />
+                            <TextBlock x:Name="UploadProgressText" Margin="0,8,0,0" Foreground="#FF8291A7" Text="尚未上传" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Column="2" Style="{StaticResource Card}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <StackPanel>
+                                <TextBlock FontSize="16" FontWeight="SemiBold" Text="训练结果与模型产物" />
+                                <TextBlock x:Name="JobIdentityText" Margin="0,7,0,0" FontFamily="Consolas"
+                                           Foreground="#FF8291A7" Text="JOB —" TextWrapping="Wrap" />
+                                <Grid Margin="0,11,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="ExistingJobIdText" ToolTip="输入服务器 Job ID，或使用自动保存的上次任务" />
+                                    <Button Grid.Column="1" Margin="9,0,0,0" Content="加载任务" Click="LoadExistingJob_Click" />
+                                </Grid>
+                            </StackPanel>
+                            <Border Grid.Row="1" Margin="0,15,0,12" Padding="13" Background="#FF0A111C" CornerRadius="10">
+                                <StackPanel>
+                                    <TextBlock x:Name="JobStatusText" FontSize="15" FontWeight="SemiBold" Text="等待训练任务" />
+                                    <TextBlock x:Name="MetricsText" Margin="0,8,0,0" Foreground="#FFB5C2D4"
+                                               Text="完成后显示 State RF / Event RF 准确率与质量门禁" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                            <ListBox x:Name="ArtifactList" Grid.Row="2" Background="#FF0A111C" Foreground="#FFD7E1EF"
+                                     BorderBrush="#FF263246" FontFamily="Consolas" FontSize="11" />
+                            <StackPanel Grid.Row="3" Margin="0,13,0,0" Orientation="Horizontal">
+                                <Button x:Name="DownloadArtifactsButton" IsEnabled="False" Content="下载全部产物" Click="DownloadArtifacts_Click" />
+                                <Button x:Name="ApproveButton" IsEnabled="False" Style="{StaticResource Primary}"
+                                        Content="人工批准此模型" Click="Approve_Click" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </TabItem>
+        </TabControl>
+    </Grid>
+</Window>

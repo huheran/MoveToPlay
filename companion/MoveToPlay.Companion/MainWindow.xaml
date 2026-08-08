@@ -385,6 +385,8 @@
                                                    Foreground="#FF7F8CA3" Text="BLADE" />
                                     </StackPanel>
                                 </UniformGrid>
+                                <Button Margin="0,16,0,0" Height="34" Style="{StaticResource GhostButton}"
+                                        Content="数据采集与云端训练" Click="OpenTrainingWindow_Click" />
                             </StackPanel>
                         </Border>
 

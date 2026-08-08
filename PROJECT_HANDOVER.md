@@ -508,8 +508,7 @@ Tracker LED：
 标准流程：
 
 ```powershell
-# 先在 app_main.c 修改 M2P_BOARD_PROFILE
-# Dongle 还要确认 M2P_DONGLE_MODE
+# Profile 现在可以通过独立构建目录的 CMake 参数指定，不再手改 app_main.c
 
 idf.py build
 idf.py -p COMx flash monitor
@@ -531,6 +530,16 @@ idf.py -B build-tracker8mb -p COMx flash monitor
 idf.py -B build-dongle16mb `
   -D "SDKCONFIG=build-dongle16mb/sdkconfig" `
   -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults.16mb" build
+```
+
+16 MB 数据采集 Dongle：
+
+```powershell
+idf.py -B build-dongle-collect `
+  -D "SDKCONFIG=build-dongle-collect/sdkconfig" `
+  -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults.16mb" `
+  -D "M2P_BOARD_PROFILE=1" `
+  -D "M2P_DONGLE_MODE=1" build
 ```
 
 默认 8 MB 分区：
@@ -560,7 +569,7 @@ build/esp_idf_template.bin
 1. 将 Dongle 设为 Profile 1。
 2. 将 `M2P_DONGLE_MODE` 设为 Data Collect。
 3. 四个 Tracker 全部上线。
-4. 使用 `collect_imu_events.py` 收集样本和事件标记。
+4. 使用 Companion 的“数据采集与云端训练”窗口收集样本和事件标记；`collect_imu_events.py` 保留为命令行诊断工具。
 5. 按 40 ms 时间网格对齐四个节点。
 6. 使用 `train_event_rf.py` 分别训练状态模型和事件模型。
 7. 使用 `export_rf_model_c.py` 导出 C 数组。
@@ -569,14 +578,14 @@ build/esp_idf_template.bin
 
 当前训练命令记录在 `tools/retrain_models.sh`。
 
-一个严重的可复现性问题是，该脚本依赖：
+训练流水线依赖：
 
 ```text
 data/processed/event_samples_combined_slash_full.csv
 data/processed/event_events_combined_slash_full.csv
 ```
 
-但这两个文件当前不存在。
+这两个恢复后的文件目前位于工程中，并已在本机和云端完成完整流水线复核。
 
 同时：
 

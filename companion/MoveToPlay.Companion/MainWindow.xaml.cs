@@ -78,6 +78,7 @@ public partial class MainWindow : Window
     private IReadOnlyList<GameProfile> _profiles = [];
     private IReadOnlyList<GameWindowTarget> _windowTargets = [];
     private OverlayWindow? _overlayWindow;
+    private TrainingWindow? _trainingWindow;
     private HwndSource? _hwndSource;
     private Forms.NotifyIcon? _trayIcon;
     private Drawing.Icon? _trayIconAsset;
@@ -127,6 +128,22 @@ public partial class MainWindow : Window
 
     private async void OnContentRendered(object? sender, EventArgs e)
     {
+        var trainingCaptureArgument = Environment.GetCommandLineArgs()
+            .FirstOrDefault(argument => argument.StartsWith("--capture-training=", StringComparison.OrdinalIgnoreCase));
+        if (trainingCaptureArgument is not null)
+        {
+            _trainingWindow = new TrainingWindow(() => { }, () => { }) { Owner = this };
+            _trainingWindow.Show();
+            await Task.Delay(800);
+            var trainingOutputPath = Path.GetFullPath(trainingCaptureArgument["--capture-training=".Length..].Trim('"'));
+            CaptureElementToPng(_trainingWindow, trainingOutputPath);
+            _trainingWindow.Close();
+            _trainingWindow = null;
+            _exitRequested = true;
+            Close();
+            return;
+        }
+
         if (Environment.GetCommandLineArgs().Any(argument => argument.Equals("--show-overlay", StringComparison.OrdinalIgnoreCase)))
         {
             await Task.Delay(500);
@@ -606,6 +623,21 @@ public partial class MainWindow : Window
     }
 
     private void ToggleOverlayButton_Click(object sender, RoutedEventArgs e) => ToggleOverlay();
+
+    private void OpenTrainingWindow_Click(object sender, RoutedEventArgs e)
+    {
+        if (_trainingWindow is { IsLoaded: true })
+        {
+            _trainingWindow.Activate();
+            return;
+        }
+        _trainingWindow = new TrainingWindow(_telemetrySource.Stop, _telemetrySource.Start)
+        {
+            Owner = this,
+        };
+        _trainingWindow.Closed += (_, _) => _trainingWindow = null;
+        _trainingWindow.Show();
+    }
 
     private void ToggleOverlay()
     {
