@@ -37,6 +37,7 @@ public sealed class CloudTrainingApiClient : IDisposable
         string name,
         string samplesPath,
         string eventsPath,
+        string? baseDatasetId = null,
         CancellationToken cancellationToken = default)
     {
         var samples = new FileInfo(samplesPath);
@@ -47,6 +48,7 @@ public sealed class CloudTrainingApiClient : IDisposable
             samples = new { filename = samples.Name, bytes = samples.Length, sha256 = await Sha256Async(samplesPath, cancellationToken) },
             events = new { filename = events.Name, bytes = events.Length, sha256 = await Sha256Async(eventsPath, cancellationToken) },
             event_id_scope = "global",
+            base_dataset_id = baseDatasetId,
         };
         return await SendJsonAsync<CloudDataset>(HttpMethod.Post, "/api/v1/datasets", payload, cancellationToken);
     }

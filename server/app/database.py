@@ -50,6 +50,7 @@ class Database:
                     events_expected_sha256 TEXT NOT NULL,
                     events_received_bytes INTEGER NOT NULL DEFAULT 0,
                     event_id_scope TEXT NOT NULL,
+                    base_dataset_id TEXT REFERENCES datasets(id),
                     error TEXT
                 );
 
@@ -78,6 +79,10 @@ class Database:
                 connection.execute(
                     "ALTER TABLE datasets ADD COLUMN event_id_scope TEXT NOT NULL DEFAULT 'global'"
                 )
+            if "base_dataset_id" not in columns:
+                connection.execute(
+                    "ALTER TABLE datasets ADD COLUMN base_dataset_id TEXT REFERENCES datasets(id)"
+                )
         self.path.chmod(0o600)
 
     @staticmethod
@@ -91,8 +96,9 @@ class Database:
                 INSERT INTO datasets (
                     id, name, status, created_at,
                     samples_filename, samples_expected_bytes, samples_expected_sha256,
-                    events_filename, events_expected_bytes, events_expected_sha256, event_id_scope
-                ) VALUES (?, ?, 'uploading', ?, ?, ?, ?, ?, ?, ?, ?)
+                    events_filename, events_expected_bytes, events_expected_sha256,
+                    event_id_scope, base_dataset_id
+                ) VALUES (?, ?, 'uploading', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record["id"],
@@ -105,6 +111,7 @@ class Database:
                     record["events_expected_bytes"],
                     record["events_expected_sha256"],
                     record["event_id_scope"],
+                    record.get("base_dataset_id"),
                 ),
             )
         result = self.get_dataset(record["id"])

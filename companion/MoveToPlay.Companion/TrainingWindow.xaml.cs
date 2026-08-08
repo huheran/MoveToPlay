@@ -1,5 +1,7 @@
+using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
+using System.Net.Http;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -22,23 +24,17 @@ public partial class TrainingWindow : Window
         new("right_hand_slash", "右手挥砍状态 right_hand_slash"),
     ];
 
-    private static readonly TrainingEventOption[] EventOptions =
+    private static readonly BladeMarkingModeOption[] BladeMarkingModes =
     [
-        new("attack_event", "hands_shoot", "双手射击"),
-        new("attack_event", "kick", "踢腿"),
-        new("jump_event", "jump", "跳跃"),
-        new("skill_event", "hands_press_down", "双手下压"),
-        new("skill_event", "hands_cross_forehead", "双手交叉额前"),
-        new("skill_event", "ultraman_beam", "奥特曼光线"),
-        new("pause_event", "right_hand_raise", "右手抬起"),
-        new("pause_event", "left_hand_raise", "左手抬起"),
-        new("turn_event", "turn_left", "向左转"),
-        new("turn_event", "turn_right", "向右转"),
+        new(BladeMarkingMode.Immediate, "即时标记（应用延迟补偿）"),
+        new(BladeMarkingMode.Countdown, "倒计时提示音（推荐）"),
     ];
 
     private readonly Action _pauseTelemetry;
     private readonly Action _resumeTelemetry;
     private readonly ImuCollectionService _collector = new();
+    private readonly EventCatalogService _eventCatalog = new();
+    private readonly ObservableCollection<TrainingEventOption> _eventOptions = [];
     private readonly TrainingHistoryService _history = new();
     private SshTunnelService? _tunnel;
     private CloudTrainingApiClient? _api;
@@ -55,6 +51,14 @@ public partial class TrainingWindow : Window
         InitializeComponent();
         StateLabelSelector.ItemsSource = StateLabels;
         StateLabelSelector.SelectedIndex = 0;
+        foreach (var option in _eventCatalog.Load())
+        {
+            _eventOptions.Add(option);
+        }
+        EventSelector.ItemsSource = _eventOptions;
+        EventSelector.SelectedIndex = _eventOptions.Count > 0 ? 0 : -1;
+        BladeModeSelector.ItemsSource = BladeMarkingModes;
+        BladeModeSelector.SelectedIndex = 0;
         if (Environment.GetCommandLineArgs().Any(argument =>
                 argument.Equals("--training-tab=cloud", StringComparison.OrdinalIgnoreCase)))
         {
@@ -63,12 +67,7 @@ public partial class TrainingWindow : Window
         CollectionRootText.Text = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "MoveToPlay", "collections");
         DatasetNameText.Text = $"决赛演示采集-{DateTime.Now:yyyy-MM-dd-HHmm}";
-        foreach (var marker in EventOptions)
-        {
-            var button = new Button { Content = marker.DisplayName, Tag = marker, ToolTip = marker.Type };
-            button.Click += EventMarker_Click;
-            EventButtonPanel.Children.Add(button);
-        }
+        UpdateCollectorBladeSettings();
         _collector.StatusChanged += Collector_StatusChanged;
         Loaded += (_, _) =>
         {
@@ -124,6 +123,7 @@ public partial class TrainingWindow : Window
         }
         try
         {
+            UpdateCollectorBladeSettings();
             PauseTelemetry();
             _collector.Start(port, CollectionRootText.Text);
             StartCollectionButton.IsEnabled = false;
@@ -159,10 +159,11 @@ public partial class TrainingWindow : Window
         }
     }
 
-    private void EventMarker_Click(object sender, RoutedEventArgs e)
+    private void MarkSelectedEvent_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not Button { Tag: TrainingEventOption marker })
+        if (EventSelector.SelectedItem is not TrainingEventOption marker)
         {
+            MessageBox.Show(this, "请先选择动作事件。", "没有动作", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
         try
@@ -176,13 +177,108 @@ public partial class TrainingWindow : Window
         }
     }
 
+    private void EventSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (EventSelector.SelectedItem is TrainingEventOption marker)
+        {
+            EventDisplayNameText.Text = marker.DisplayName;
+            EventTypeText.Text = marker.Type;
+            EventGroupText.Text = marker.Group;
+        }
+        UpdateCollectorBladeSettings();
+    }
+
+    private void BladeSettings_Changed(object sender, RoutedEventArgs e) => UpdateCollectorBladeSettings();
+
+    private void BladeModeSelector_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        UpdateCollectorBladeSettings();
+
+    private void SaveEventOption_Click(object sender, RoutedEventArgs e)
+    {
+        var option = new TrainingEventOption(
+            EventGroupText.Text.Trim().ToLowerInvariant(),
+            EventTypeText.Text.Trim().ToLowerInvariant(),
+            EventDisplayNameText.Text.Trim());
+        if (!EventCatalogService.IsValid(option))
+        {
+            MessageBox.Show(
+                this,
+                "名称不能为空；动作 ID 和事件组必须以英文字母开头，只能包含英文小写、数字和下划线，最长31个字符。",
+                "动作信息无效",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        var existingIndex = _eventOptions
+            .Select((item, index) => (item, index))
+            .FirstOrDefault(pair => pair.item.Type.Equals(option.Type, StringComparison.Ordinal)).index;
+        var existing = _eventOptions.FirstOrDefault(item => item.Type.Equals(option.Type, StringComparison.Ordinal));
+        if (existing is null)
+        {
+            _eventOptions.Add(option);
+        }
+        else
+        {
+            _eventOptions[existingIndex] = option;
+        }
+        try
+        {
+            _eventCatalog.Save(_eventOptions);
+            EventSelector.SelectedItem = option;
+            CollectionStatusText.Text = $"动作事件库已保存：{option.DisplayName} ({option.Type})";
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, exception.Message, "动作事件库保存失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void DeleteEventOption_Click(object sender, RoutedEventArgs e)
+    {
+        if (EventSelector.SelectedItem is not TrainingEventOption selected)
+        {
+            return;
+        }
+        if (_eventOptions.Count <= 1)
+        {
+            MessageBox.Show(this, "动作事件库至少要保留一个动作。", "无法删除", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        _eventOptions.Remove(selected);
+        try
+        {
+            _eventCatalog.Save(_eventOptions);
+            EventSelector.SelectedIndex = 0;
+            CollectionStatusText.Text = $"已从事件库删除：{selected.DisplayName}";
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _eventOptions.Add(selected);
+            EventSelector.SelectedItem = selected;
+            MessageBox.Show(this, exception.Message, "动作事件库保存失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void UpdateCollectorBladeSettings()
+    {
+        var selectedEvent = EventSelector?.SelectedItem as TrainingEventOption;
+        var mode = (BladeModeSelector?.SelectedItem as BladeMarkingModeOption)?.Mode ?? BladeMarkingMode.Immediate;
+        var countdownMs = ParseInt(BladeCountdownText?.Text, 1000);
+        var compensationMs = ParseInt(BladeCompensationText?.Text, 50);
+        _collector.ConfigureBladeMarker(selectedEvent, mode, countdownMs, compensationMs);
+    }
+
+    private static int ParseInt(string? value, int fallback) =>
+        int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : fallback;
+
     private void Collector_StatusChanged(object? sender, ImuCollectionStatus status)
     {
         _ = Dispatcher.BeginInvoke(() =>
         {
             CollectionStatusText.Text = status.Detail;
             var nodes = status.OnlineNodes.Length == 0 ? "—" : string.Join(", ", status.OnlineNodes);
-            SampleCountText.Text = $"样本 {status.SampleCount:N0} · 在线节点 {nodes}";
+            SampleCountText.Text = $"样本 {status.SampleCount:N0} · 事件 {status.EventCount:N0} · 在线节点 {nodes}";
             if (!status.Running && StopCollectionButton.IsEnabled)
             {
                 StopCollection();
@@ -285,9 +381,29 @@ public partial class TrainingWindow : Window
             JobStatusText.Text = "正在计算文件哈希并登记数据集";
             if (_activeDataset is null || _activeDataset.Status != "uploading")
             {
+                var baseDatasetId = _history.LoadLastPassedDatasetId();
+                if (!string.IsNullOrWhiteSpace(baseDatasetId))
+                {
+                    try
+                    {
+                        var baseDataset = await _api.GetDatasetAsync(baseDatasetId, cancellationToken);
+                        if (!string.Equals(baseDataset.Status, "ready", StringComparison.Ordinal))
+                        {
+                            baseDatasetId = null;
+                        }
+                    }
+                    catch (Exception exception) when (exception is InvalidOperationException or HttpRequestException)
+                    {
+                        baseDatasetId = null;
+                    }
+                }
+                if (!string.IsNullOrWhiteSpace(baseDatasetId))
+                {
+                    JobStatusText.Text = $"正在登记增量数据集，基础数据集 {baseDatasetId}";
+                }
                 _activeDataset = await _api.CreateDatasetAsync(
                     string.IsNullOrWhiteSpace(DatasetNameText.Text) ? $"MoveToPlay-{DateTime.Now:yyyyMMdd-HHmm}" : DatasetNameText.Text.Trim(),
-                    SamplesPathText.Text, EventsPathText.Text, cancellationToken);
+                    SamplesPathText.Text, EventsPathText.Text, baseDatasetId, cancellationToken);
             }
             JobIdentityText.Text = $"DATASET {_activeDataset.Id}";
             var progress = new Progress<CloudUploadProgress>(value =>

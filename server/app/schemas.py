@@ -25,6 +25,7 @@ class DatasetCreate(BaseModel):
     samples: UploadFileSpec
     events: UploadFileSpec
     event_id_scope: Literal["global", "session"] = "global"
+    base_dataset_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
 
 
 class JobCreate(BaseModel):

@@ -375,6 +375,8 @@ Dongle 现在只有一份统一固件。每次长按 GPIO4 两秒按顺序切换
 
 切换顺序为 `Play → Data Collect → Wi-Fi Maintenance → 重启回 Play`。进入采集态前固件会释放所有按住的键盘和鼠标报告；Play 与采集态共用同一个 TinyUSB CDC 端口，因此切换采集不需要重新枚举 USB，也不需要重新烧录。
 
+采集态的 Tracker CSV 末尾包含 Dongle 接收时间。Blade 每次有效按下边沿会发送 `#M2P_EVENT,blade_click,<dongle_ms>,<sequence>`；固件等待一次松开后才允许下一次标记，因此状态变化突发重发不会制造重复事件。Companion 使用同一 Dongle 时钟对齐样本和事件，并提供即时补偿与倒计时提示音两种方式。
+
 ---
 
 ## 11. Wi-Fi 配置与维护模式
@@ -407,11 +409,13 @@ Dongle 在橙色采集态下再次长按 GPIO4 两秒进入 Wi-Fi 模式：
 - 冷却时间
 - 持续帧数
 
+配置按模型动作 ID 保存，而不是按类别序号保存。新模型的未知动作会自动出现在表格中并默认禁用输出；玩家配置后才会产生键鼠动作。旧版15类序号配置首次加载时会按原动作 ID 自动迁移，因此模型类别排序变化不会导致按键错配。
+
 保存后写入 NVS：
 
 - Namespace：`m2p_dongle`
 - Key：`actions`
-- 配置版本：1
+- 配置版本：2
 
 再次长按 GPIO4 两秒会重启并回到绿色 Play 状态。
 
@@ -560,12 +564,14 @@ build/esp_idf_template.bin
 1. 将 Dongle 设为 Profile 1。
 2. 烧录统一 Dongle 固件；绿色 Play 下长按两秒，看到橙灯后进入采集态。
 3. 四个 Tracker 全部上线。
-4. 使用 Companion 的“数据采集与云端训练”窗口收集样本和事件标记；`collect_imu_events.py` 保留为命令行诊断工具。
+4. 在 Companion 预选或新增事件动作，选择 Blade 即时标记或倒计时提示音后收集样本；`collect_imu_events.py` 保留为命令行诊断工具。
 5. 按 40 ms 时间网格对齐四个节点。
 6. 使用 `train_event_rf.py` 分别训练状态模型和事件模型。
 7. 使用 `export_rf_model_c.py` 导出 C 数组。
 8. 将批准后的 C 数组集成并重新编译统一 Dongle 固件。
 9. 长按切回 Wi-Fi 后再长按重启至绿色 Play，用实机串口和 HID 行为验证。
+
+云端数据集支持 `base_dataset_id`。Companion 默认以最后一次训练通过的数据集作为基础，只上传当前新会话；worker 在任务目录中按数据集链合并 CSV，并给 session/event ID 加来源前缀避免冲突。事件模型质量门禁要求原15类仍存在，同时允许新增类别，并对新增类别执行相同的召回率检查。
 
 当前训练命令记录在 `tools/retrain_models.sh`。
 

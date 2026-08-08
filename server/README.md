@@ -62,6 +62,8 @@ ssh -L 8000:127.0.0.1:8000 movetoplay-server
 
 在另一个 PowerShell 中设置令牌并上传。历史合并数据的 `event_id` 只在 session 内唯一，所以使用 `session`；新采集数据默认应使用全局唯一 ID。
 
+`POST /api/v1/datasets` 可选传入 `base_dataset_id`。新数据仍按原大小和 SHA-256 续传，训练 worker 会递归展开已就绪的基础数据集链，在 Job 目录中合并 CSV，并给 `session_id`/`event_id` 添加来源数据集前缀。这样玩家只上传新动作会话，也能保留基础模型的全部旧动作。
+
 ```powershell
 $env:MOVETOPLAY_API_TOKEN = '<服务器令牌>'
 python tools\upload_training_dataset.py `
