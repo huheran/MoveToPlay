@@ -137,6 +137,7 @@ static const char *TAG = "imu_main";
 #define DONGLE_WIFI_LED_R             0
 #define DONGLE_WIFI_LED_G             0
 #define DONGLE_WIFI_LED_B             20
+#define DONGLE_BLADE_MARKER_QUEUE_SIZE 8
 #define DONGLE_STATUS_ONLINE_MAX_AGE_MS 1500
 #define DONGLE_RF_MAX_NODE_AGE_MS     250
 #define DONGLE_RF_PRINT_INTERVAL_MS   120
@@ -434,9 +435,18 @@ typedef enum {
     DONGLE_RUNTIME_WIFI = 2,
 } dongle_runtime_mode_t;
 
+typedef struct {
+    int64_t dongle_timestamp_us;
+    uint32_t blade_sequence;
+} dongle_blade_marker_t;
+
 static dongle_latest_node_t s_dongle_latest_nodes[DONGLE_MAX_TRACKER_NODES];
 static dongle_blade_state_t s_dongle_blade_state;
 static volatile dongle_runtime_mode_t s_dongle_runtime_mode = DONGLE_RUNTIME_PLAY;
+static volatile bool s_dongle_collect_blade_armed = false;
+static dongle_blade_marker_t s_dongle_blade_markers[DONGLE_BLADE_MARKER_QUEUE_SIZE];
+static uint8_t s_dongle_blade_marker_head = 0;
+static uint8_t s_dongle_blade_marker_count = 0;
 static SemaphoreHandle_t s_dongle_state_mutex;
 #if DONGLE_ENABLE_USB_KEYBOARD || DONGLE_ENABLE_USB_MOUSE
 static SemaphoreHandle_t s_dongle_hid_mutex;
@@ -784,12 +794,12 @@ static void dongle_send_latest_node_csv(dongle_latest_node_t *node, int64_t now_
     }
 
     /* Plain CSV for PC-side collection tools:
-     * timestamp_ms,node_id,ax,ay,az,gx,gy,gz[,age_ms]
+     * tracker_timestamp_ms,node_id,ax,ay,az,gx,gy,gz,age_ms,dongle_rx_ms
      */
-    char line[192];
+    char line[224];
     const int written = snprintf(line,
                                  sizeof(line),
-                                 "%" PRIu32 ",%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.1f\n",
+                                 "%" PRIu32 ",%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.1f,%" PRIi64 "\n",
                                  packet->timestamp_us / 1000U,
                                  packet->node_id,
                                  (double)packet->accel_g[0],
@@ -798,10 +808,50 @@ static void dongle_send_latest_node_csv(dongle_latest_node_t *node, int64_t now_
                                  (double)packet->gyro_dps[0],
                                  (double)packet->gyro_dps[1],
                                  (double)packet->gyro_dps[2],
-                                 age_ms);
+                                 age_ms,
+                                 node->last_rx_us / 1000LL);
     if (written > 0 && written < (int)sizeof(line) &&
         usb_telemetry_write_line(line) == ESP_OK) {
         node->dirty = false;
+    }
+}
+
+static void dongle_queue_blade_marker(int64_t dongle_timestamp_us, uint32_t blade_sequence)
+{
+    if (s_dongle_blade_marker_count >= DONGLE_BLADE_MARKER_QUEUE_SIZE) {
+        ESP_LOGW(TAG, "Blade marker queue full; dropping sequence=%" PRIu32, blade_sequence);
+        return;
+    }
+
+    const uint8_t tail = (uint8_t)((s_dongle_blade_marker_head +
+                                    s_dongle_blade_marker_count) %
+                                   DONGLE_BLADE_MARKER_QUEUE_SIZE);
+    s_dongle_blade_markers[tail] = (dongle_blade_marker_t) {
+        .dongle_timestamp_us = dongle_timestamp_us,
+        .blade_sequence = blade_sequence,
+    };
+    s_dongle_blade_marker_count++;
+}
+
+static void dongle_send_pending_blade_markers(void)
+{
+    while (s_dongle_blade_marker_count > 0 && usb_telemetry_is_ready()) {
+        const dongle_blade_marker_t *marker =
+            &s_dongle_blade_markers[s_dongle_blade_marker_head];
+        char line[112];
+        const int written = snprintf(line,
+                                     sizeof(line),
+                                     "#M2P_EVENT,blade_click,%" PRIi64 ",%" PRIu32 "\n",
+                                     marker->dongle_timestamp_us / 1000LL,
+                                     marker->blade_sequence);
+        if (written <= 0 || written >= (int)sizeof(line) ||
+            usb_telemetry_write_line(line) != ESP_OK) {
+            return;
+        }
+
+        s_dongle_blade_marker_head =
+            (uint8_t)((s_dongle_blade_marker_head + 1U) % DONGLE_BLADE_MARKER_QUEUE_SIZE);
+        s_dongle_blade_marker_count--;
     }
 }
 
@@ -922,19 +972,33 @@ typedef struct {
 } dongle_key_action_t;
 
 #define DONGLE_NUM_CLASSES RF_MODEL_CLASS_COUNT
-#define DONGLE_IDLE_CLASS 3
-#define DONGLE_JUMP_CLASS 4
-#define DONGLE_LEFT_HAND_RAISE_CLASS 6
-#define DONGLE_MOVE_NOISE_CLASS 7
-#define DONGLE_RIGHT_HAND_RAISE_CLASS 8
-#define DONGLE_RIGHT_HAND_SLASH_CLASS 9
-#define DONGLE_RUN_CLASS 10
-#define DONGLE_TURN_LEFT_CLASS 11
-#define DONGLE_TURN_RIGHT_CLASS 12
-#define DONGLE_WALK_CLASS 14
+static uint8_t s_dongle_idle_class = 0;
+static uint8_t s_dongle_jump_class = 0;
+static uint8_t s_dongle_left_hand_raise_class = 0;
+static uint8_t s_dongle_move_noise_class = 0;
+static uint8_t s_dongle_right_hand_raise_class = 0;
+static uint8_t s_dongle_right_hand_slash_class = 0;
+static uint8_t s_dongle_run_class = 0;
+static uint8_t s_dongle_turn_left_class = 0;
+static uint8_t s_dongle_turn_right_class = 0;
+static uint8_t s_dongle_walk_class = 0;
+#define DONGLE_IDLE_CLASS s_dongle_idle_class
+#define DONGLE_JUMP_CLASS s_dongle_jump_class
+#define DONGLE_LEFT_HAND_RAISE_CLASS s_dongle_left_hand_raise_class
+#define DONGLE_MOVE_NOISE_CLASS s_dongle_move_noise_class
+#define DONGLE_RIGHT_HAND_RAISE_CLASS s_dongle_right_hand_raise_class
+#define DONGLE_RIGHT_HAND_SLASH_CLASS s_dongle_right_hand_slash_class
+#define DONGLE_RUN_CLASS s_dongle_run_class
+#define DONGLE_TURN_LEFT_CLASS s_dongle_turn_left_class
+#define DONGLE_TURN_RIGHT_CLASS s_dongle_turn_right_class
+#define DONGLE_WALK_CLASS s_dongle_walk_class
 
 #define DONGLE_ACTION_CONFIG_MAGIC       0x4D325043U /* M2PC */
-#define DONGLE_ACTION_CONFIG_VERSION     1
+#define DONGLE_ACTION_CONFIG_VERSION     2
+#define DONGLE_ACTION_CONFIG_LEGACY_VERSION 1
+#define DONGLE_ACTION_CONFIG_MAX_ENTRIES 32
+#define DONGLE_ACTION_ID_MAX_LEN         31
+#define DONGLE_LEGACY_ACTION_CLASS_COUNT 15
 #define DONGLE_ACTION_CONFIG_NVS_NS      "m2p_dongle"
 #define DONGLE_ACTION_CONFIG_NVS_KEY     "actions"
 #define DONGLE_ACTION_CONFIG_POST_MAX    8192
@@ -950,6 +1014,7 @@ typedef struct {
 } dongle_value_label_t;
 
 typedef struct {
+    char action_id[DONGLE_ACTION_ID_MAX_LEN + 1];
     uint8_t type;
     uint8_t modifier;
     uint8_t keycode;
@@ -964,8 +1029,30 @@ typedef struct {
     uint32_t magic;
     uint16_t version;
     uint16_t entry_count;
-    dongle_action_config_entry_t entries[DONGLE_NUM_CLASSES];
+    dongle_action_config_entry_t entries[DONGLE_ACTION_CONFIG_MAX_ENTRIES];
 } dongle_action_config_storage_t;
+
+typedef struct {
+    uint8_t type;
+    uint8_t modifier;
+    uint8_t keycode;
+    uint8_t trigger;
+    uint16_t cooldown_ms;
+    uint16_t sustain_frames;
+    uint8_t confidence_percent;
+    uint8_t reserved;
+} dongle_action_config_legacy_entry_t;
+
+typedef struct {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t entry_count;
+    dongle_action_config_legacy_entry_t entries[DONGLE_LEGACY_ACTION_CLASS_COUNT];
+} dongle_action_config_legacy_storage_t;
+
+#if DONGLE_NUM_CLASSES > DONGLE_ACTION_CONFIG_MAX_ENTRIES
+#error "RF model has more classes than the Dongle action configuration supports"
+#endif
 
 static const dongle_value_label_t s_action_type_options[] = {
     { ACTION_TYPE_NONE, "禁用" },
@@ -1011,45 +1098,34 @@ static const dongle_value_label_t s_key_options[] = {
     { HID_KEY_SPACE, "空格" }, { HID_KEY_ENTER, "回车" }, { HID_KEY_ESCAPE, "Esc" },
 };
 
-static const char *s_dongle_action_display_names[DONGLE_NUM_CLASSES] = {
-    [0] = "双手交叉额头",
-    [1] = "下压",
-    [2] = "射击",
-    [3] = "空闲",
-    [4] = "跳跃",
-    [5] = "踢",
-    [6] = "左手抬起",
-    [7] = "动作噪声",
-    [8] = "右手抬起",
-    [9] = "右手挥砍",
-    [10] = "奔跑",
-    [11] = "左转",
-    [12] = "右转",
-    [13] = "奥特曼光线",
-    [14] = "行走",
+typedef struct {
+    const char *action_id;
+    const char *display_name;
+    dongle_key_action_t action;
+} dongle_default_action_t;
+
+static const dongle_default_action_t s_dongle_default_actions[] = {
+    { "hands_cross_forehead", "双手交叉额头", { ACTION_TYPE_CHARACTER_CYCLE, 0, 0, TRIGGER_EDGE, 800, 0 } },
+    { "hands_press_down", "下压", { ACTION_TYPE_KEY_TAP, 0, HID_KEY_F, TRIGGER_COOLDOWN, 600, 0 } },
+    { "hands_shoot", "射击", { ACTION_TYPE_MOUSE_RIGHT_TIMED_HOLD, 0, 0, TRIGGER_EDGE, 500, 0 } },
+    { "idle", "空闲", { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 } },
+    { "jump", "跳跃", { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 1000, 0 } },
+    { "kick", "踢", { ACTION_TYPE_KEY_TAP, 0, HID_KEY_E, TRIGGER_COOLDOWN, 1000, 0 } },
+    { "left_hand_raise", "左手抬起", { ACTION_TYPE_KEY_TAP, 0, HID_KEY_M, TRIGGER_EDGE, 800, 0 } },
+    { "move_noise", "动作噪声", { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 } },
+    { "right_hand_raise", "右手抬起", { ACTION_TYPE_KEY_TAP, 0, HID_KEY_X, TRIGGER_EDGE, 800, 0 } },
+    { "right_hand_slash", "右手挥砍", { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_REPEAT, DONGLE_SLASH_CLICK_INTERVAL_MS, 1 } },
+    { "run", "奔跑", { ACTION_TYPE_KEY_HOLD, USB_KEYBOARD_MOD_LEFT_SHIFT, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 } },
+    { "turn_left", "左转", { ACTION_TYPE_MOUSE_TURN_LEFT, 0, 0, TRIGGER_REPEAT, DONGLE_VIEW_ACTION_INTERVAL_MS, 1 } },
+    { "turn_right", "右转", { ACTION_TYPE_MOUSE_TURN_RIGHT, 0, 0, TRIGGER_REPEAT, DONGLE_VIEW_ACTION_INTERVAL_MS, 1 } },
+    { "ultraman_beam", "奥特曼光线", { ACTION_TYPE_KEY_TAP, 0, HID_KEY_Q, TRIGGER_COOLDOWN, 1000, 0 } },
+    { "walk", "行走", { ACTION_TYPE_KEY_HOLD, 0, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 } },
 };
 
-/* RF class order from sklearn string labels:
-   hands_cross_forehead(0), hands_press_down(1), hands_shoot(2), idle(3),
-   jump(4), kick(5), left_hand_raise(6), move_noise(7),
-   right_hand_raise(8), right_hand_slash(9), run(10), turn_left(11),
-   turn_right(12), ultraman_beam(13), walk(14) */
-static const dongle_key_action_t s_default_class_key_actions[DONGLE_NUM_CLASSES] = {
-    [0] = { ACTION_TYPE_CHARACTER_CYCLE, 0, 0, TRIGGER_EDGE, 800, 0 },       /* hands_cross_forehead -> 1/2/3/4 */
-    [1] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_F, TRIGGER_COOLDOWN, 600, 0 },   /* hands_press_down -> F */
-    [2] = { ACTION_TYPE_MOUSE_RIGHT_TIMED_HOLD, 0, 0, TRIGGER_EDGE, 500, 0 }, /* hands_shoot -> hold right mouse 500ms */
-    [3] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* idle */
-    [4] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_SPACE, TRIGGER_EDGE, 1000, 0 },  /* jump -> SPACE */
-    [5] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_E, TRIGGER_COOLDOWN, 1000, 0 },  /* kick -> E */
-    [6] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_M, TRIGGER_EDGE, 800, 0 },        /* left_hand_raise -> M */
-    [7] = { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 },                /* move_noise */
-    [8] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_X, TRIGGER_EDGE, 800, 0 },        /* right_hand_raise -> X */
-    [9] = { ACTION_TYPE_MOUSE_CLICK, 0, 0, TRIGGER_REPEAT, DONGLE_SLASH_CLICK_INTERVAL_MS, 1 }, /* right_hand_slash -> left click every 500ms */
-    [10] = { ACTION_TYPE_KEY_HOLD, USB_KEYBOARD_MOD_LEFT_SHIFT, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 }, /* run -> Shift+W */
-    [11] = { ACTION_TYPE_MOUSE_TURN_LEFT, 0, 0, TRIGGER_REPEAT, DONGLE_VIEW_ACTION_INTERVAL_MS, 1 }, /* turn_left -> mouse left */
-    [12] = { ACTION_TYPE_MOUSE_TURN_RIGHT, 0, 0, TRIGGER_REPEAT, DONGLE_VIEW_ACTION_INTERVAL_MS, 1 }, /* turn_right -> mouse right */
-    [13] = { ACTION_TYPE_KEY_TAP, 0, HID_KEY_Q, TRIGGER_COOLDOWN, 1000, 0 }, /* ultraman_beam -> Q */
-    [14] = { ACTION_TYPE_KEY_HOLD, 0, HID_KEY_W, TRIGGER_COOLDOWN, 0, 0 },   /* walk -> W */
+static const char *const s_dongle_legacy_action_ids[DONGLE_LEGACY_ACTION_CLASS_COUNT] = {
+    "hands_cross_forehead", "hands_press_down", "hands_shoot", "idle", "jump",
+    "kick", "left_hand_raise", "move_noise", "right_hand_raise", "right_hand_slash",
+    "run", "turn_left", "turn_right", "ultraman_beam", "walk",
 };
 
 static dongle_key_action_t s_dongle_key_actions[DONGLE_NUM_CLASSES];
@@ -1131,10 +1207,64 @@ static uint16_t dongle_clamp_u16(uint32_t value, uint16_t min_value, uint16_t ma
     return (uint16_t)value;
 }
 
+static const dongle_default_action_t *dongle_default_action_for_id(const char *action_id)
+{
+    if (action_id == NULL) {
+        return NULL;
+    }
+    for (size_t i = 0; i < DONGLE_ARRAY_SIZE(s_dongle_default_actions); i++) {
+        if (strcmp(s_dongle_default_actions[i].action_id, action_id) == 0) {
+            return &s_dongle_default_actions[i];
+        }
+    }
+    return NULL;
+}
+
+static int dongle_model_class_index_for_id(const char *action_id)
+{
+    if (action_id == NULL) {
+        return -1;
+    }
+    for (uint8_t i = 0; i < DONGLE_NUM_CLASSES; i++) {
+        if (strcmp(rf_model_class_names[i], action_id) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static uint8_t dongle_required_model_class(const char *action_id)
+{
+    const int class_idx = dongle_model_class_index_for_id(action_id);
+    if (class_idx < 0) {
+        ESP_LOGE(TAG, "required RF class is missing: %s", action_id);
+        return 0;
+    }
+    return (uint8_t)class_idx;
+}
+
+static void dongle_resolve_core_model_classes(void)
+{
+    s_dongle_idle_class = dongle_required_model_class("idle");
+    s_dongle_jump_class = dongle_required_model_class("jump");
+    s_dongle_left_hand_raise_class = dongle_required_model_class("left_hand_raise");
+    s_dongle_move_noise_class = dongle_required_model_class("move_noise");
+    s_dongle_right_hand_raise_class = dongle_required_model_class("right_hand_raise");
+    s_dongle_right_hand_slash_class = dongle_required_model_class("right_hand_slash");
+    s_dongle_run_class = dongle_required_model_class("run");
+    s_dongle_turn_left_class = dongle_required_model_class("turn_left");
+    s_dongle_turn_right_class = dongle_required_model_class("turn_right");
+    s_dongle_walk_class = dongle_required_model_class("walk");
+}
+
 static void dongle_action_config_set_defaults(void)
 {
-    memcpy(s_dongle_key_actions, s_default_class_key_actions, sizeof(s_dongle_key_actions));
     for (uint8_t i = 0; i < DONGLE_NUM_CLASSES; i++) {
+        const dongle_default_action_t *known =
+            dongle_default_action_for_id(rf_model_class_names[i]);
+        s_dongle_key_actions[i] = (known != NULL) ?
+            known->action :
+            (dongle_key_action_t) { ACTION_TYPE_NONE, 0, 0, TRIGGER_COOLDOWN, 0, 0 };
         s_dongle_action_confidence_percent[i] = DONGLE_RF_DEFAULT_CONFIDENCE_PERCENT;
     }
     s_dongle_action_config_ready = true;
@@ -1170,6 +1300,7 @@ static void dongle_action_config_export(dongle_action_config_storage_t *storage)
     for (uint8_t i = 0; i < DONGLE_NUM_CLASSES; i++) {
         const dongle_key_action_t *action = &s_dongle_key_actions[i];
         dongle_action_config_entry_t *entry = &storage->entries[i];
+        snprintf(entry->action_id, sizeof(entry->action_id), "%s", rf_model_class_names[i]);
         entry->type = (uint8_t)action->type;
         entry->modifier = action->modifier;
         entry->keycode = action->keycode;
@@ -1187,18 +1318,26 @@ static void dongle_action_config_apply(const dongle_action_config_storage_t *sto
     if (storage == NULL ||
         storage->magic != DONGLE_ACTION_CONFIG_MAGIC ||
         storage->version != DONGLE_ACTION_CONFIG_VERSION ||
-        storage->entry_count != DONGLE_NUM_CLASSES) {
+        storage->entry_count > DONGLE_ACTION_CONFIG_MAX_ENTRIES) {
         return;
     }
 
-    for (uint8_t i = 0; i < DONGLE_NUM_CLASSES; i++) {
-        const dongle_action_config_entry_t *entry = &storage->entries[i];
+    for (uint16_t stored_idx = 0; stored_idx < storage->entry_count; stored_idx++) {
+        const dongle_action_config_entry_t *entry = &storage->entries[stored_idx];
+        if (memchr(entry->action_id, '\0', sizeof(entry->action_id)) == NULL) {
+            ESP_LOGW(TAG, "action config entry %u has no terminated ID", stored_idx);
+            continue;
+        }
+        const int class_idx = dongle_model_class_index_for_id(entry->action_id);
+        if (class_idx < 0) {
+            continue;
+        }
         if (!dongle_action_config_entry_valid(entry)) {
-            ESP_LOGW(TAG, "invalid action config entry %u, using default", i);
+            ESP_LOGW(TAG, "invalid action config for %s, using default", entry->action_id);
             continue;
         }
 
-        s_dongle_key_actions[i] = (dongle_key_action_t) {
+        s_dongle_key_actions[class_idx] = (dongle_key_action_t) {
             .type = (dongle_action_type_t)entry->type,
             .modifier = entry->modifier,
             .keycode = entry->keycode,
@@ -1206,7 +1345,46 @@ static void dongle_action_config_apply(const dongle_action_config_storage_t *sto
             .cooldown_ms = entry->cooldown_ms,
             .sustain_frames = entry->sustain_frames,
         };
-        s_dongle_action_confidence_percent[i] = entry->confidence_percent;
+        s_dongle_action_confidence_percent[class_idx] = entry->confidence_percent;
+    }
+}
+
+static void dongle_action_config_apply_legacy(const dongle_action_config_legacy_storage_t *storage)
+{
+    dongle_action_config_set_defaults();
+    if (storage == NULL || storage->magic != DONGLE_ACTION_CONFIG_MAGIC ||
+        storage->version != DONGLE_ACTION_CONFIG_LEGACY_VERSION ||
+        storage->entry_count != DONGLE_LEGACY_ACTION_CLASS_COUNT) {
+        return;
+    }
+
+    for (uint8_t legacy_idx = 0; legacy_idx < DONGLE_LEGACY_ACTION_CLASS_COUNT; legacy_idx++) {
+        const int class_idx = dongle_model_class_index_for_id(s_dongle_legacy_action_ids[legacy_idx]);
+        if (class_idx < 0) {
+            continue;
+        }
+        const dongle_action_config_legacy_entry_t *legacy = &storage->entries[legacy_idx];
+        dongle_action_config_entry_t entry = {
+            .type = legacy->type,
+            .modifier = legacy->modifier,
+            .keycode = legacy->keycode,
+            .trigger = legacy->trigger,
+            .cooldown_ms = legacy->cooldown_ms,
+            .sustain_frames = legacy->sustain_frames,
+            .confidence_percent = legacy->confidence_percent,
+        };
+        if (!dongle_action_config_entry_valid(&entry)) {
+            continue;
+        }
+        s_dongle_key_actions[class_idx] = (dongle_key_action_t) {
+            .type = (dongle_action_type_t)entry.type,
+            .modifier = entry.modifier,
+            .keycode = entry.keycode,
+            .trigger = (dongle_trigger_mode_t)entry.trigger,
+            .cooldown_ms = entry.cooldown_ms,
+            .sustain_frames = entry.sustain_frames,
+        };
+        s_dongle_action_confidence_percent[class_idx] = entry.confidence_percent;
     }
 }
 
@@ -1244,27 +1422,48 @@ static esp_err_t dongle_action_config_load(void)
         return err;
     }
 
-    dongle_action_config_storage_t storage = {0};
-    size_t required_size = sizeof(storage);
-    err = nvs_get_blob(handle, DONGLE_ACTION_CONFIG_NVS_KEY, &storage, &required_size);
-    nvs_close(handle);
-
+    size_t required_size = 0;
+    err = nvs_get_blob(handle, DONGLE_ACTION_CONFIG_NVS_KEY, NULL, &required_size);
     if (err == ESP_ERR_NVS_NOT_FOUND) {
+        nvs_close(handle);
         ESP_LOGI(TAG, "dongle action config blob not found, using defaults");
         return ESP_OK;
     }
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "read dongle action config failed: %s", esp_err_to_name(err));
+        nvs_close(handle);
+        ESP_LOGW(TAG, "query dongle action config failed: %s", esp_err_to_name(err));
         return err;
     }
-    if (required_size != sizeof(storage)) {
-        ESP_LOGW(TAG, "dongle action config size mismatch, using defaults");
-        return ESP_ERR_INVALID_SIZE;
+
+    if (required_size == sizeof(dongle_action_config_storage_t)) {
+        dongle_action_config_storage_t storage = {0};
+        err = nvs_get_blob(handle, DONGLE_ACTION_CONFIG_NVS_KEY, &storage, &required_size);
+        nvs_close(handle);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "read dongle action config failed: %s", esp_err_to_name(err));
+            return err;
+        }
+        dongle_action_config_apply(&storage);
+        ESP_LOGI(TAG, "ID-keyed dongle action config loaded from NVS");
+        return ESP_OK;
     }
 
-    dongle_action_config_apply(&storage);
-    ESP_LOGI(TAG, "dongle action config loaded from NVS");
-    return ESP_OK;
+    if (required_size == sizeof(dongle_action_config_legacy_storage_t)) {
+        dongle_action_config_legacy_storage_t legacy = {0};
+        err = nvs_get_blob(handle, DONGLE_ACTION_CONFIG_NVS_KEY, &legacy, &required_size);
+        nvs_close(handle);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "read legacy dongle action config failed: %s", esp_err_to_name(err));
+            return err;
+        }
+        dongle_action_config_apply_legacy(&legacy);
+        ESP_LOGI(TAG, "legacy index-keyed action config migrated to action IDs");
+        return dongle_action_config_save_current();
+    }
+
+    nvs_close(handle);
+    ESP_LOGW(TAG, "dongle action config size mismatch (%u), using defaults", (unsigned)required_size);
+    return ESP_ERR_INVALID_SIZE;
 }
 
 static esp_err_t dongle_action_config_reset_defaults(void)
@@ -1296,8 +1495,10 @@ static const char *dongle_action_class_name(uint8_t class_idx)
 
 static const char *dongle_action_class_display_name(uint8_t class_idx)
 {
-    if (class_idx < DONGLE_NUM_CLASSES && s_dongle_action_display_names[class_idx] != NULL) {
-        return s_dongle_action_display_names[class_idx];
+    if (class_idx < DONGLE_NUM_CLASSES) {
+        const dongle_default_action_t *known =
+            dongle_default_action_for_id(rf_model_class_names[class_idx]);
+        return (known != NULL) ? known->display_name : rf_model_class_names[class_idx];
     }
 
     return "未知动作";
@@ -1316,8 +1517,8 @@ typedef struct {
 } dongle_telemetry_state_t;
 
 static dongle_telemetry_state_t s_dongle_telemetry_state = {
-    .action_class = DONGLE_IDLE_CLASS,
-    .event_action_class = DONGLE_IDLE_CLASS,
+    .action_class = 0,
+    .event_action_class = 0,
     .event_name = "none",
 };
 static uint32_t s_dongle_telemetry_packet_sequence;
@@ -1374,7 +1575,7 @@ static void dongle_telemetry_note_output(uint8_t class_idx, const char *event)
 #if DONGLE_ENABLE_ACTION_DEBUG_OUTPUT
 static bool s_dongle_hid_trigger_since_last_print = false;
 static uint32_t s_dongle_hid_trigger_count_since_last_print = 0;
-static uint8_t s_dongle_last_hid_trigger_class = DONGLE_IDLE_CLASS;
+static uint8_t s_dongle_last_hid_trigger_class = 0;
 static const char *s_dongle_last_hid_trigger_event = "none";
 #endif
 static bool s_dongle_hid_ready = false;
@@ -1533,7 +1734,7 @@ static uint8_t s_dongle_pending_count = 0;
 static int64_t s_dongle_last_fire_us[DONGLE_NUM_CLASSES] = {0};
 static int8_t s_dongle_last_turn_fire_class = -1;
 static int64_t s_dongle_last_turn_fire_us = 0;
-static int8_t s_dongle_last_state_class = DONGLE_IDLE_CLASS;
+static int8_t s_dongle_last_state_class = 0;
 static int64_t s_dongle_last_state_us = 0;
 static int8_t s_dongle_resume_state_class = -1;
 static int64_t s_dongle_resume_state_until_us = 0;
@@ -2654,7 +2855,7 @@ static esp_err_t dongle_http_send_config_form(httpd_req_t *req)
 
     esp_err_t err = httpd_resp_sendstr_chunk(
         req,
-        "<p class=\"sub\">保存后配置会写入接收器 flash，重启或退出 Wi-Fi 显示模式后继续生效。</p>"
+        "<p class=\"sub\">配置按动作英文 ID 保存；新模型中的新动作会自动出现并默认禁用输出。保存后写入接收器 flash。</p>"
         "<form method=\"post\" action=\"/api/config\">"
         "<div class=\"scroll\"><table class=\"config\"><thead><tr>"
         "<th>ID</th><th>动作</th><th>输出</th><th>按键</th><th>组合键</th>"
@@ -2893,7 +3094,7 @@ static esp_err_t dongle_config_api_get_handler(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
 
     esp_err_t err = httpd_resp_sendstr_chunk(req,
-                                             "{\"version\":1,\"confidence_min\":30,"
+                                             "{\"version\":2,\"confidence_min\":30,"
                                              "\"confidence_max\":95,\"classes\":[");
     if (err != ESP_OK) {
         return err;
@@ -3290,7 +3491,6 @@ static esp_err_t dongle_enter_collect_mode(void)
 #if DONGLE_ENABLE_USB_MOUSE
     (void)usb_mouse_release_buttons();
 #endif
-    s_dongle_runtime_mode = DONGLE_RUNTIME_COLLECT;
 
 #if DONGLE_ENABLE_USB_KEYBOARD || DONGLE_ENABLE_USB_MOUSE
     if (s_dongle_hid_mutex != NULL) {
@@ -3304,7 +3504,12 @@ static esp_err_t dongle_enter_collect_mode(void)
             s_dongle_latest_nodes[i].dirty = true;
         }
     }
+    s_dongle_collect_blade_armed =
+        s_dongle_blade_state.valid && !s_dongle_blade_state.pressed;
+    s_dongle_blade_marker_head = 0;
+    s_dongle_blade_marker_count = 0;
     dongle_state_unlock();
+    s_dongle_runtime_mode = DONGLE_RUNTIME_COLLECT;
 
     status_led_set_color(DONGLE_COLLECT_LED_R,
                          DONGLE_COLLECT_LED_G,
@@ -3464,7 +3669,18 @@ static void espnow_rx_task(void *arg)
                     dongle_store_latest_packet(&rx_packet);
                 }
             } else if (rx_packet.packet.type == M2P_ESPNOW_PACKET_BLADE_STATE) {
+                const bool blade_pressed =
+                    (rx_packet.packet.flags & M2P_ESPNOW_BLADE_FLAG_PRESSED) != 0;
                 dongle_store_blade_packet(&rx_packet);
+                if (s_dongle_runtime_mode == DONGLE_RUNTIME_COLLECT) {
+                    if (!blade_pressed) {
+                        s_dongle_collect_blade_armed = true;
+                    } else if (s_dongle_collect_blade_armed) {
+                        s_dongle_collect_blade_armed = false;
+                        dongle_queue_blade_marker(esp_timer_get_time(),
+                                                  rx_packet.packet.sequence);
+                    }
+                }
             }
 #endif
 
@@ -3492,6 +3708,7 @@ static void espnow_rx_task(void *arg)
                     dongle_telemetry_maybe_send(esp_timer_get_time());
 #endif
                 } else if (runtime_mode == DONGLE_RUNTIME_COLLECT) {
+                    dongle_send_pending_blade_markers();
                     dongle_send_latest_nodes_csv(esp_timer_get_time());
                 }
             }
@@ -3990,6 +4207,13 @@ static void blade_report_task(void *arg)
 
 static void start_dongle_mode(void)
 {
+    dongle_resolve_core_model_classes();
+    s_dongle_telemetry_state.action_class = DONGLE_IDLE_CLASS;
+    s_dongle_telemetry_state.event_action_class = DONGLE_IDLE_CLASS;
+#if DONGLE_ENABLE_ACTION_DEBUG_OUTPUT
+    s_dongle_last_hid_trigger_class = DONGLE_IDLE_CLASS;
+#endif
+    s_dongle_last_state_class = (int8_t)DONGLE_IDLE_CLASS;
     ESP_LOGI(TAG, "Starting dongle mode");
     ESP_LOGI(TAG, "role: receive tracker data");
     ESP_LOGI(TAG, "esp-now channel=%d", M2P_ESPNOW_CHANNEL);

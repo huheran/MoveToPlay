@@ -30,6 +30,7 @@ def dataset_response(row: dict) -> dict:
         "created_at": row["created_at"],
         "completed_at": row["completed_at"],
         "event_id_scope": row["event_id_scope"],
+        "base_dataset_id": row.get("base_dataset_id"),
         "files": {
             kind: {
                 "filename": row[f"{kind}_filename"],
@@ -113,6 +114,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         for kind, spec in (("samples", payload.samples), ("events", payload.events)):
             if spec.bytes > maximum:
                 raise HTTPException(status_code=413, detail=f"{kind} exceeds maximum file size")
+        if payload.base_dataset_id is not None:
+            base = request.app.state.database.get_dataset(payload.base_dataset_id)
+            if base is None:
+                raise HTTPException(status_code=404, detail="base dataset not found")
+            if base["status"] != "ready":
+                raise HTTPException(status_code=409, detail="base dataset is not ready")
         dataset_id = uuid.uuid4().hex
         directory = dataset_dir(request.app.state.settings.storage_root, dataset_id)
         directory.mkdir(parents=True, exist_ok=False)
@@ -127,6 +134,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "events_expected_bytes": payload.events.bytes,
                 "events_expected_sha256": payload.events.sha256.upper(),
                 "event_id_scope": payload.event_id_scope,
+                "base_dataset_id": payload.base_dataset_id,
             }
         )
         return dataset_response(row)

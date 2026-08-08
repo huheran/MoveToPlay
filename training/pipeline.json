@@ -59,6 +59,7 @@
         "symbol_prefix": "rf_model"
       },
       "quality": {
+        "allow_extra_classes": true,
         "required_classes": [
           "hands_cross_forehead",
           "hands_press_down",

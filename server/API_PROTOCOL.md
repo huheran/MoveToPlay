@@ -29,11 +29,14 @@ Authorization: Bearer <token>
     "bytes": 1234,
     "sha256": "64位十六进制SHA-256"
   },
-  "event_id_scope": "global"
+  "event_id_scope": "global",
+  "base_dataset_id": "可选的32位基础数据集ID"
 }
 ```
 
 上传是严格顺序追加的。若客户端偏移与服务器不一致，服务器返回 HTTP 409 和正确的 `expected_offset`；客户端应查询数据集后从该位置继续。完成后的数据集不可修改，哈希错误的数据集会标记为 `rejected`，需要重新创建。
+
+`base_dataset_id` 省略或传 `null` 时是独立数据集；传入一个已处于 `ready` 状态的数据集后，worker 会递归合并基础链和本次 CSV。合并时会为 `session_id`、`event_id` 增加来源数据集前缀，避免不同采集会话发生 ID 冲突。
 
 ## 训练任务流程
 

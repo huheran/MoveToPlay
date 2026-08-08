@@ -4,11 +4,14 @@
         Title="MoveToPlay · 数据采集与云端训练"
         Width="1180" Height="800" MinWidth="1040" MinHeight="720"
         WindowStartupLocation="CenterOwner" Background="#FF080D15"
-        FontFamily="{StaticResource AppFont}">
+        Foreground="#FFE7EDF7" FontFamily="{StaticResource AppFont}">
     <Window.Resources>
         <Style TargetType="TextBlock">
             <Setter Property="Foreground" Value="#FFE7EDF7" />
         </Style>
+        <DataTemplate x:Key="ComboBoxTextTemplate">
+            <TextBlock Foreground="#FF172033" Text="{Binding}" />
+        </DataTemplate>
         <Style x:Key="Card" TargetType="Border">
             <Setter Property="Background" Value="#FF111925" />
             <Setter Property="BorderBrush" Value="#FF263246" />
@@ -34,6 +37,7 @@
         <Style TargetType="ComboBox">
             <Setter Property="MinHeight" Value="34" />
             <Setter Property="Padding" Value="8,4" />
+            <Setter Property="ItemTemplate" Value="{StaticResource ComboBoxTextTemplate}" />
             <Setter Property="Background" Value="#FF0B121E" />
             <Setter Property="Foreground" Value="#FF172033" />
             <Setter Property="BorderBrush" Value="#FF64748B" />
@@ -121,17 +125,55 @@
                     </Border>
 
                     <Border Grid.Column="2" Style="{StaticResource Card}">
-                        <StackPanel>
-                            <TextBlock FontSize="16" FontWeight="SemiBold" Text="动作事件标记" />
-                            <TextBlock Margin="0,7,0,17" Foreground="#FF8291A7" TextWrapping="Wrap"
-                                       Text="动作做到最明显的位置时按一次对应按钮。每种动作建议分多轮采集，动作前后各保留约 2 秒。" />
-                            <UniformGrid x:Name="EventButtonPanel" Columns="2" />
-                            <Border Margin="0,14,0,0" Padding="14" Background="#172DD4BF" BorderBrush="#552DD4BF"
-                                    BorderThickness="1" CornerRadius="10">
-                                <TextBlock Foreground="#FF9BE7DB" TextWrapping="Wrap"
-                                           Text="采集建议：先录 idle / walk / run / move_noise 等连续状态，再逐个录制事件动作。每次切换标签后停顿一秒再开始动作。" />
-                            </Border>
-                        </StackPanel>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel>
+                                <TextBlock FontSize="16" FontWeight="SemiBold" Text="单人动作事件标记" />
+                                <TextBlock Margin="0,7,0,14" Foreground="#FF8291A7" TextWrapping="Wrap"
+                                           Text="先预选本次动作。采集时每按一次 Blade 只生成一个事件，也可以使用电脑按钮备用标记。" />
+
+                                <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="本次采集动作" />
+                                <ComboBox x:Name="EventSelector" SelectionChanged="EventSelector_SelectionChanged" />
+                                <TextBlock Margin="0,13,0,6" Foreground="#FF93A3B8" Text="Blade 标记方式" />
+                                <ComboBox x:Name="BladeModeSelector" SelectionChanged="BladeModeSelector_SelectionChanged" />
+                                <Grid Margin="0,12,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="12" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="倒计时 ms" />
+                                        <TextBox x:Name="BladeCountdownText" Text="1000" LostFocus="BladeSettings_Changed" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="即时延迟补偿 ms" />
+                                        <TextBox x:Name="BladeCompensationText" Text="50" LostFocus="BladeSettings_Changed" />
+                                    </StackPanel>
+                                </Grid>
+                                <StackPanel Margin="0,14,0,0" Orientation="Horizontal">
+                                    <Button Style="{StaticResource Primary}" Content="立即标记所选动作" Click="MarkSelectedEvent_Click" />
+                                </StackPanel>
+
+                                <Border Margin="0,10,0,13" Height="1" Background="#FF263246" />
+                                <TextBlock FontSize="14" FontWeight="SemiBold" Text="编辑动作事件库" />
+                                <TextBlock Margin="0,8,0,5" Foreground="#FF93A3B8" Text="显示名称" />
+                                <TextBox x:Name="EventDisplayNameText" />
+                                <TextBlock Margin="0,9,0,5" Foreground="#FF93A3B8" Text="动作 ID（英文小写）" />
+                                <TextBox x:Name="EventTypeText" />
+                                <TextBlock Margin="0,9,0,5" Foreground="#FF93A3B8" Text="事件组 ID" />
+                                <TextBox x:Name="EventGroupText" Text="custom_event" />
+                                <StackPanel Margin="0,13,0,0" Orientation="Horizontal">
+                                    <Button Content="新增 / 保存" Click="SaveEventOption_Click" />
+                                    <Button Content="删除所选" Click="DeleteEventOption_Click" />
+                                </StackPanel>
+
+                                <Border Margin="0,8,0,0" Padding="14" Background="#172DD4BF" BorderBrush="#552DD4BF"
+                                        BorderThickness="1" CornerRadius="10">
+                                    <TextBlock Foreground="#FF9BE7DB" TextWrapping="Wrap"
+                                               Text="倒计时方式最稳：按 Blade 后等待提示音再做动作，通信延迟不会进入动作标签。新动作训练进模型后，会自动出现在 Dongle Wi-Fi 按键配置页。" />
+                                </Border>
+                            </StackPanel>
+                        </ScrollViewer>
                     </Border>
                 </Grid>
             </TabItem>

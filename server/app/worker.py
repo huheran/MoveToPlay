@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import signal
@@ -29,9 +30,80 @@ def counter_dict(counter: Counter[str]) -> dict[str, int]:
     return {key: int(value) for key, value in sorted(counter.items())}
 
 
-def build_dataset_manifest(settings: Settings, dataset: dict, destination: Path) -> dict:
-    samples_path = dataset_file(settings.storage_root, dataset["id"], "samples")
-    events_path = dataset_file(settings.storage_root, dataset["id"], "events")
+def dataset_lineage(database: Database, dataset: dict) -> list[dict]:
+    lineage: list[dict] = []
+    seen: set[str] = set()
+    current: dict | None = dataset
+    while current is not None:
+        dataset_id = str(current["id"])
+        if dataset_id in seen:
+            raise ValueError("dataset base chain contains a cycle")
+        seen.add(dataset_id)
+        if current["status"] != "ready":
+            raise ValueError(f"dataset in base chain is not ready: {dataset_id}")
+        lineage.append(current)
+        base_id = current.get("base_dataset_id")
+        current = database.get_dataset(str(base_id)) if base_id else None
+        if base_id and current is None:
+            raise ValueError(f"base dataset is missing: {base_id}")
+    lineage.reverse()
+    return lineage
+
+
+def merge_csv_files(
+    sources: list[tuple[Path, str]],
+    destination: Path,
+    identity_columns: tuple[str, ...],
+) -> None:
+    fieldnames: list[str] = []
+    for source, _ in sources:
+        with source.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.reader(handle)
+            header = next(reader, None)
+            if not header:
+                raise ValueError(f"CSV is empty: {source}")
+            for name in header:
+                if name not in fieldnames:
+                    fieldnames.append(name)
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("w", encoding="utf-8", newline="") as output:
+        writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for source, source_id in sources:
+            with source.open("r", encoding="utf-8-sig", newline="") as handle:
+                reader = csv.DictReader(handle)
+                for row in reader:
+                    for column in identity_columns:
+                        if row.get(column):
+                            row[column] = f"{source_id}:{row[column]}"
+                    writer.writerow(row)
+
+
+def build_dataset_manifest(
+    settings: Settings,
+    database: Database,
+    dataset: dict,
+    destination: Path,
+) -> dict:
+    lineage = dataset_lineage(database, dataset)
+    if len(lineage) == 1:
+        samples_path = dataset_file(settings.storage_root, dataset["id"], "samples")
+        events_path = dataset_file(settings.storage_root, dataset["id"], "events")
+    else:
+        merged_root = destination.parent / "merged-dataset"
+        samples_path = merged_root / "samples.csv"
+        events_path = merged_root / "events.csv"
+        merge_csv_files(
+            [(dataset_file(settings.storage_root, item["id"], "samples"), item["id"]) for item in lineage],
+            samples_path,
+            ("session_id",),
+        )
+        merge_csv_files(
+            [(dataset_file(settings.storage_root, item["id"], "events"), item["id"]) for item in lineage],
+            events_path,
+            ("session_id", "event_id"),
+        )
 
     sample_rows = 0
     sample_sessions: set[str] = set()
@@ -58,6 +130,7 @@ def build_dataset_manifest(settings: Settings, dataset: dict, destination: Path)
         "schema_version": 1,
         "dataset_id": dataset["id"],
         "description": dataset["name"],
+        "dataset_lineage": [item["id"] for item in lineage],
         "ingestion": {"kind": "processed_csv", "producer": "movetoplay-server-upload-v1"},
         "samples": {
             "path": str(samples_path.resolve()),
@@ -71,7 +144,7 @@ def build_dataset_manifest(settings: Settings, dataset: dict, destination: Path)
         },
         "events": {
             "path": str(events_path.resolve()),
-            "event_id_scope": dataset["event_id_scope"],
+            "event_id_scope": "session" if len(lineage) > 1 else dataset["event_id_scope"],
             "bytes": events_path.stat().st_size,
             "sha256": sha256_file(events_path),
             "rows": int(len(events)),
@@ -100,7 +173,7 @@ def run_one(settings: Settings, database: Database) -> bool:
         dataset = database.get_dataset(job["dataset_id"])
         if dataset is None or dataset["status"] != "ready":
             raise RuntimeError("dataset is missing or no longer ready")
-        build_dataset_manifest(settings, dataset, manifest_path)
+        build_dataset_manifest(settings, database, dataset, manifest_path)
         command = [
             sys.executable,
             str(PROJECT_ROOT / "tools" / "run_training_pipeline.py"),

@@ -28,6 +28,9 @@ public sealed class CloudDataset
     [JsonPropertyName("status")]
     public string Status { get; init; } = "";
 
+    [JsonPropertyName("base_dataset_id")]
+    public string? BaseDatasetId { get; init; }
+
     [JsonPropertyName("files")]
     public Dictionary<string, CloudFileState> Files { get; init; } = [];
 

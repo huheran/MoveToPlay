@@ -335,9 +335,20 @@ def quality_gate(
     macro_f1 = float(training_summary["report"]["macro avg"]["f1-score"])
     class_names = list(training_summary["class_names"])
     required_classes = list(quality["required_classes"])
+    allow_extra_classes = bool(quality.get("allow_extra_classes", False))
     add_check("accuracy", accuracy >= float(quality["min_accuracy"]), accuracy, f">={quality['min_accuracy']}")
     add_check("macro_f1", macro_f1 >= float(quality["min_macro_f1"]), macro_f1, f">={quality['min_macro_f1']}")
-    add_check("class_names", class_names == required_classes, class_names, required_classes)
+    classes_ok = (
+        set(required_classes).issubset(class_names)
+        if allow_extra_classes
+        else class_names == required_classes
+    )
+    add_check(
+        "class_names",
+        classes_ok,
+        class_names,
+        f"contains {required_classes}" if allow_extra_classes else required_classes,
+    )
     add_check(
         "feature_count",
         int(training_summary["feature_count"]) == int(quality["feature_count"]),
@@ -358,12 +369,13 @@ def quality_gate(
     )
     add_check(
         "export_class_names",
-        list(export_summary["class_names"]) == required_classes,
+        list(export_summary["class_names"]) == class_names,
         list(export_summary["class_names"]),
-        required_classes,
+        class_names,
     )
     min_recall = float(quality["min_class_recall"])
-    for class_name in required_classes:
+    recall_classes = class_names if allow_extra_classes else required_classes
+    for class_name in recall_classes:
         recall = float(training_summary["report"].get(class_name, {}).get("recall", -1.0))
         add_check(f"recall:{class_name}", recall >= min_recall, recall, f">={min_recall}")
 
