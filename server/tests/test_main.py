@@ -25,3 +25,25 @@ def test_protected_endpoint_requires_bearer_token(tmp_path: Path) -> None:
         assert client.get(
             "/api/v1/datasets", headers={"Authorization": "Bearer test-token"}
         ).status_code == 200
+
+
+def test_system_config_requires_ready_official_dataset(tmp_path: Path) -> None:
+    headers = {"Authorization": "Bearer test-token"}
+    settings = Settings(
+        storage_root=tmp_path,
+        api_token="test-token",
+        official_dataset_id="a" * 32,
+    )
+    with TestClient(create_app(settings)) as client:
+        response = client.get("/api/v1/system-config", headers=headers)
+        assert response.status_code == 503
+
+
+def test_system_config_allows_unconfigured_official_dataset(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        response = client.get(
+            "/api/v1/system-config",
+            headers={"Authorization": "Bearer test-token"},
+        )
+        assert response.status_code == 200
+        assert response.json() == {"official_dataset_id": None}

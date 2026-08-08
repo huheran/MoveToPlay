@@ -33,6 +33,9 @@ public sealed class CloudTrainingApiClient : IDisposable
         return response.IsSuccessStatusCode;
     }
 
+    public Task<CloudSystemConfig> GetSystemConfigAsync(CancellationToken cancellationToken = default) =>
+        SendJsonAsync<CloudSystemConfig>(HttpMethod.Get, "/api/v1/system-config", null, cancellationToken);
+
     public async Task<CloudDataset> CreateDatasetAsync(
         string name,
         string samplesPath,

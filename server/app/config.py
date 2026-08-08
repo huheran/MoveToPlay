@@ -11,6 +11,7 @@ from pathlib import Path
 class Settings:
     storage_root: Path
     api_token: str | None
+    official_dataset_id: str | None = None
     max_file_bytes: int = 256 * 1024 * 1024
     max_chunk_bytes: int = 8 * 1024 * 1024
     worker_poll_seconds: float = 2.0
@@ -18,9 +19,11 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         token = os.getenv("MOVETOPLAY_API_TOKEN", "").strip() or None
+        official_dataset_id = os.getenv("MOVETOPLAY_OFFICIAL_DATASET_ID", "").strip() or None
         return cls(
             storage_root=Path(os.getenv("MOVETOPLAY_STORAGE_ROOT", "/srv/movetoplay")),
             api_token=token,
+            official_dataset_id=official_dataset_id,
             max_file_bytes=int(os.getenv("MOVETOPLAY_MAX_FILE_BYTES", str(256 * 1024 * 1024))),
             max_chunk_bytes=int(os.getenv("MOVETOPLAY_MAX_CHUNK_BYTES", str(8 * 1024 * 1024))),
             worker_poll_seconds=float(os.getenv("MOVETOPLAY_WORKER_POLL_SECONDS", "2")),

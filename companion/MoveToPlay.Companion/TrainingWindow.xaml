@@ -175,7 +175,97 @@
                 </Grid>
             </TabItem>
 
-            <TabItem Header="  2. 云端训练  ">
+            <TabItem Header="  2. 我的采集数据  ">
+                <Grid Margin="0,14,0,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="12" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Border Style="{StaticResource Card}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock FontSize="16" FontWeight="SemiBold" Text="我的采集数据" />
+                                <TextBlock Margin="0,7,0,0" Foreground="#FF8291A7" TextWrapping="Wrap"
+                                           Text="每一行代表一次独立采集。勾选任意历史会话后合并进入训练；删除只影响本机所选会话，不会修改官方基础数据。" />
+                                <TextBlock x:Name="CollectionLibraryRootText" Margin="0,7,0,0" FontSize="10"
+                                           Foreground="#FF718096" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <Button Grid.Column="1" VerticalAlignment="Center" Content="刷新列表" Click="RefreshCollectionLibrary_Click" />
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="2" Style="{StaticResource Card}" Padding="10">
+                        <ListBox x:Name="CollectionSessionList" Background="Transparent" BorderThickness="0"
+                                 ScrollViewer.VerticalScrollBarVisibility="Auto">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                    <Setter Property="Padding" Value="0" />
+                                    <Setter Property="Margin" Value="0,0,0,7" />
+                                    <Setter Property="Background" Value="Transparent" />
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Padding="12" Background="#FF0A111C" BorderBrush="#FF263246"
+                                            BorderThickness="1" CornerRadius="9">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="14" />
+                                                <ColumnDefinition Width="1.2*" />
+                                                <ColumnDefinition Width="2*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <CheckBox VerticalAlignment="Center" IsChecked="{Binding IsSelected, Mode=TwoWay}" />
+                                            <StackPanel Grid.Column="2">
+                                                <TextBlock FontWeight="SemiBold" Text="{Binding CreatedDisplay}" />
+                                                <TextBlock Margin="0,4,0,0" FontFamily="Consolas" FontSize="10"
+                                                           Foreground="#FF718096" Text="{Binding SessionId}" />
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="3">
+                                                <TextBlock Text="{Binding ActionsDisplay}" TextWrapping="Wrap" />
+                                                <TextBlock Margin="0,4,0,0" FontSize="10" Foreground="#FF8291A7"
+                                                           Text="{Binding CountsDisplay}" />
+                                            </StackPanel>
+                                            <TextBlock Grid.Column="4" VerticalAlignment="Center" Foreground="#FF8291A7"
+                                                       Text="{Binding SizeDisplay}" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Border>
+
+                    <Border Grid.Row="3" Margin="0,12,0,0" Padding="14" Background="#FF111925"
+                            BorderBrush="#FF263246" BorderThickness="1" CornerRadius="12">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock x:Name="CollectionLibraryStatusText" Text="等待读取采集数据" TextWrapping="Wrap" />
+                                <StackPanel Margin="0,9,0,0" Orientation="Horizontal">
+                                    <Button Content="全选" Click="SelectAllCollections_Click" />
+                                    <Button Content="清除选择" Click="ClearCollectionSelection_Click" />
+                                    <Button Content="删除选中的本地数据" Click="DeleteSelectedCollections_Click" />
+                                </StackPanel>
+                            </StackPanel>
+                            <Button Grid.Column="1" Style="{StaticResource Primary}" VerticalAlignment="Center"
+                                    Content="使用选中数据进入训练 →" Click="PrepareSelectedCollections_Click" />
+                        </Grid>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="  3. 云端训练  ">
                 <Grid Margin="0,14,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="0.95*" />
@@ -189,17 +279,17 @@
                                        Text="无需域名。软件使用 SSH 配置 movetoplay-server 建立加密隧道，训练 API 仍只监听服务器本机。" />
                             <Button x:Name="ConnectCloudButton" Style="{StaticResource Primary}" HorizontalAlignment="Left"
                                     Content="连接阿里云服务器" Click="ConnectCloud_Click" />
+                            <TextBlock Margin="0,10,0,0" Foreground="#FF2DD4BF" TextWrapping="Wrap"
+                                       Text="训练文件由“我的采集数据”页面生成，避免误传或漏传历史会话。" />
                             <TextBlock Margin="0,14,0,6" Foreground="#FF93A3B8" Text="samples.csv" />
                             <Grid>
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                 <TextBox x:Name="SamplesPathText" IsReadOnly="True" />
-                                <Button Grid.Column="1" Margin="9,0,0,0" Content="选择" Click="ChooseSamples_Click" />
                             </Grid>
                             <TextBlock Margin="0,12,0,6" Foreground="#FF93A3B8" Text="events.csv" />
                             <Grid>
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                 <TextBox x:Name="EventsPathText" IsReadOnly="True" />
-                                <Button Grid.Column="1" Margin="9,0,0,0" Content="选择" Click="ChooseEvents_Click" />
                             </Grid>
                             <TextBlock Margin="0,12,0,6" Foreground="#FF93A3B8" Text="数据集名称" />
                             <TextBox x:Name="DatasetNameText" Text="决赛演示采集" />
@@ -219,6 +309,7 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             <StackPanel>
@@ -246,8 +337,32 @@
                             <StackPanel Grid.Row="3" Margin="0,13,0,0" Orientation="Horizontal">
                                 <Button x:Name="DownloadArtifactsButton" IsEnabled="False" Content="下载全部产物" Click="DownloadArtifacts_Click" />
                                 <Button x:Name="ApproveButton" IsEnabled="False" Style="{StaticResource Primary}"
-                                        Content="人工批准此模型" Click="Approve_Click" />
+                                        Content="确认采用本次模型" Click="Approve_Click" />
                             </StackPanel>
+                            <Border Grid.Row="4" Margin="0,10,0,0" Padding="12" Background="#FF0A111C"
+                                    BorderBrush="#FF263246" BorderThickness="1" CornerRadius="9">
+                                <StackPanel>
+                                    <TextBlock FontWeight="SemiBold" Text="更新 Dongle 模型固件" />
+                                    <TextBlock Margin="0,5,0,8" FontSize="10" Foreground="#FF8291A7" TextWrapping="Wrap"
+                                               Text="先确认采用模型并生成固件；再让 Dongle 进入蓝灯维护模式，选择其烧录串口。" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <ComboBox x:Name="FirmwarePortSelector" SelectionChanged="FirmwarePortSelector_SelectionChanged" />
+                                        <Button Grid.Column="1" Margin="9,0,0,0" Content="刷新串口" Click="RefreshFirmwarePorts_Click" />
+                                    </Grid>
+                                    <StackPanel Margin="0,9,0,0" Orientation="Horizontal">
+                                        <Button x:Name="BuildFirmwareButton" IsEnabled="False"
+                                                Content="1. 生成 Dongle 固件" Click="BuildFirmware_Click" />
+                                        <Button x:Name="FlashFirmwareButton" IsEnabled="False" Style="{StaticResource Primary}"
+                                                Content="2. 烧录到 Dongle" Click="FlashFirmware_Click" />
+                                    </StackPanel>
+                                    <TextBlock x:Name="FirmwareStatusText" Margin="0,5,0,0" FontSize="10"
+                                               Foreground="#FF9BE7DB" Text="等待已批准模型" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
                         </Grid>
                     </Border>
                 </Grid>

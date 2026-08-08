@@ -60,6 +60,7 @@
       },
       "quality": {
         "allow_extra_classes": true,
+        "max_class_count": 32,
         "required_classes": [
           "hands_cross_forehead",
           "hands_press_down",

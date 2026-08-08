@@ -1,5 +1,77 @@
 using MoveToPlay.Companion.Services;
 
+if (args.SequenceEqual(["--collection-library"]))
+{
+    var root = Path.Combine(Path.GetTempPath(), $"movetoplay-collection-smoke-{Guid.NewGuid():N}");
+    string? preparedRoot = null;
+    try
+    {
+        Directory.CreateDirectory(root);
+        for (var index = 1; index <= 2; index++)
+        {
+            var session = Path.Combine(root, $"session-20260809-00000{index}");
+            Directory.CreateDirectory(session);
+            await File.WriteAllTextAsync(
+                Path.Combine(session, "samples.csv"),
+                "pc_timestamp_ms,board_timestamp_ms,node_id,ax,ay,az,gx,gy,gz,state_label,session_id\n" +
+                $"100{index},10,1,0.1,0.2,0.3,1,2,3,idle,session-{index}\n");
+            await File.WriteAllTextAsync(
+                Path.Combine(session, "events.csv"),
+                "event_id,event_group,event_type,pc_timestamp_ms,state_label,session_id\n" +
+                $"event-{index},jump_event,jump,100{index},idle,session-{index}\n");
+        }
+        var library = new CollectionLibraryService(new EventCatalogService());
+        var sessions = library.Load(root);
+        if (sessions.Count != 2 || sessions.Any(item => item.SampleCount != 1 || item.EventCount != 1))
+        {
+            throw new InvalidOperationException("采集会话扫描计数不正确");
+        }
+        var prepared = library.Prepare(root, sessions);
+        preparedRoot = prepared.DirectoryPath;
+        if (File.ReadLines(prepared.SamplesPath).Count() != 3 ||
+            File.ReadLines(prepared.EventsPath).Count() != 3)
+        {
+            throw new InvalidOperationException("所选会话合并结果不正确");
+        }
+        library.Delete(root, sessions[0]);
+        if (library.Load(root).Count != 1)
+        {
+            throw new InvalidOperationException("定向删除会话失败");
+        }
+        Console.WriteLine("[smoke] 采集数据扫描、选择合并、定向删除 PASS");
+        return;
+    }
+    finally
+    {
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
+        if (!string.IsNullOrWhiteSpace(preparedRoot) && Directory.Exists(preparedRoot))
+        {
+            Directory.Delete(preparedRoot, recursive: true);
+        }
+    }
+}
+
+if (args.Length == 3 && args[0].Equals("--firmware-build", StringComparison.OrdinalIgnoreCase))
+{
+    var jobId = args[1];
+    var cacheDirectory = Path.GetFullPath(args[2]);
+    var deployment = new FirmwareDeploymentService();
+    var package = await deployment.BuildDongleAsync(
+        jobId,
+        cacheDirectory,
+        new Progress<MoveToPlay.Companion.Models.FirmwareDeploymentProgress>(value =>
+            Console.WriteLine($"[firmware] {value.Stage}: {value.Detail}")));
+    if (!File.Exists(package.AppBinaryPath) || !File.Exists(package.ManifestPath))
+    {
+        throw new InvalidOperationException("固件产物或清单不存在");
+    }
+    Console.WriteLine($"[smoke] Dongle 固件构建 PASS：{package.AppBinaryPath}");
+    return;
+}
+
 using var tunnel = new SshTunnelService();
 Console.WriteLine("[smoke] 正在建立 SSH 隧道");
 var token = await tunnel.ConnectAsync();
