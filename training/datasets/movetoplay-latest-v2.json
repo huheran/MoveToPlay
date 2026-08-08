@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "dataset_id": "movetoplay-latest-v2",
+  "description": "Latest recovered processed dataset, including zhq10 and zhq11 sessions added after the deployed model was trained.",
+  "ingestion": {
+    "kind": "processed_csv",
+    "producer": "recovered-historical-manual-merge",
+    "future_compatible_producer": "companion-upload-session"
+  },
+  "samples": {
+    "path": "data/processed/event_samples_combined_slash_full.csv",
+    "bytes": 139832138,
+    "sha256": "9FBAE7C0EA1311FE88E65EB4DAE85B2CC9CF72462F7B1FA26D323899557513F0",
+    "rows": 1218686,
+    "session_count": 33,
+    "node_ids": [1, 2, 3, 4],
+    "required_columns": [
+      "pc_timestamp_ms",
+      "board_timestamp_ms",
+      "node_id",
+      "ax",
+      "ay",
+      "az",
+      "gx",
+      "gy",
+      "gz",
+      "state_label",
+      "session_id"
+    ],
+    "state_label_counts": {
+      "idle": 831941,
+      "move_noise": 28965,
+      "right_hand_slash": 106239,
+      "run": 120547,
+      "walk": 130994
+    }
+  },
+  "events": {
+    "path": "data/processed/event_events_combined_slash_full.csv",
+    "event_id_scope": "session",
+    "bytes": 143677,
+    "sha256": "6BEA265C948424E2F447B0CF1794D46373F786788A4AD426A68AA4B093203520",
+    "rows": 1722,
+    "session_count": 29,
+    "required_columns": [
+      "event_id",
+      "event_group",
+      "event_type",
+      "pc_timestamp_ms",
+      "state_label",
+      "session_id"
+    ],
+    "event_type_counts": {
+      "hands_cross_forehead": 79,
+      "hands_press_down": 159,
+      "hands_shoot": 97,
+      "jump": 366,
+      "kick": 231,
+      "left_hand_raise": 216,
+      "right_hand_raise": 236,
+      "turn_left": 116,
+      "turn_right": 129,
+      "ultraman_beam": 93
+    }
+  }
+}

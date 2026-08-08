@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "pipeline_id": "dual-rf-firmware-v1",
+  "models": [
+    {
+      "name": "state_rf_15_full",
+      "training_args": [
+        "--window-size", "15",
+        "--include-event-group", "__state_only__",
+        "--include-state-label", "idle",
+        "--include-state-label", "walk",
+        "--include-state-label", "run",
+        "--include-state-label", "move_noise",
+        "--include-state-label", "right_hand_slash",
+        "--max-state-windows-per-label", "2500",
+        "--state-onset-label", "walk",
+        "--state-onset-label", "run",
+        "--state-onset-tail-frames", "6",
+        "--synth-onset-per-label", "400",
+        "--hard-negative-event-type", "jump",
+        "--hard-negative-event-type", "kick",
+        "--hard-negative-label", "move_noise",
+        "--hard-negative-start-ms", "0",
+        "--hard-negative-end-ms", "600",
+        "--negative-ratio", "0",
+        "--n-estimators", "50",
+        "--max-depth", "9"
+      ],
+      "export": {
+        "file_prefix": "rf_state_model_generated",
+        "symbol_prefix": "rf_state_model"
+      },
+      "quality": {
+        "required_classes": ["idle", "move_noise", "right_hand_slash", "run", "walk"],
+        "feature_count": 812,
+        "tree_count": 50,
+        "min_accuracy": 0.98,
+        "min_macro_f1": 0.98,
+        "min_class_recall": 0.94
+      }
+    },
+    {
+      "name": "event_rf",
+      "training_args": [
+        "--window-size", "25",
+        "--positive-end-ms", "500",
+        "--include-state-label", "idle",
+        "--include-state-label", "walk",
+        "--include-state-label", "run",
+        "--include-state-label", "move_noise",
+        "--include-state-label", "right_hand_slash",
+        "--max-state-windows-per-label", "700",
+        "--negative-ratio", "0",
+        "--n-estimators", "180",
+        "--max-depth", "12"
+      ],
+      "export": {
+        "file_prefix": "rf_model_generated",
+        "symbol_prefix": "rf_model"
+      },
+      "quality": {
+        "required_classes": [
+          "hands_cross_forehead",
+          "hands_press_down",
+          "hands_shoot",
+          "idle",
+          "jump",
+          "kick",
+          "left_hand_raise",
+          "move_noise",
+          "right_hand_raise",
+          "right_hand_slash",
+          "run",
+          "turn_left",
+          "turn_right",
+          "ultraman_beam",
+          "walk"
+        ],
+        "feature_count": 812,
+        "tree_count": 180,
+        "min_accuracy": 0.97,
+        "min_macro_f1": 0.96,
+        "min_class_recall": 0.90
+      }
+    }
+  ]
+}

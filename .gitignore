@@ -27,6 +27,7 @@ companion/**/companion-error.log
 *.swo
 *~
 __pycache__/
+.venv-training/
 logs/
 .DS_Store
 Thumbs.db
