@@ -2,6 +2,8 @@
 
 这是 MoveToPlay 的 Windows 桌面端运动伴侣。当前版本默认通过 Dongle 的 USB CDC 复合接口接收真实动作数据，同时保留显式模拟模式用于没有硬件时预览界面。
 
+主窗口的“数据采集与云端训练”入口还可以读取 Data Collect 原始六轴数据、完成状态/事件标注、生成两张训练 CSV，并经 Windows OpenSSH 自动连接云端。它支持分块续传、Job 状态与指标展示、产物下载、本机关键模型缓存和人工批准。API 令牌只通过已有 SSH 身份读取到内存，不写入工程或明文配置；云端 API 继续只监听服务器 `127.0.0.1:8000`，决赛演示不需要域名或备案。
+
 - 透明置顶、鼠标点击穿透的游戏悬浮层；
 - 自动跟随目标游戏窗口；
 - 切出游戏时自动隐藏；
@@ -41,6 +43,16 @@ dotnet run --project companion/MoveToPlay.Companion/MoveToPlay.Companion.csproj 
 ```
 
 ## Dongle 遥测协议
+
+云端功能要求 `ssh movetoplay-server` 已经可以通过密钥登录。可运行客户端冒烟测试：
+
+```powershell
+dotnet run --project companion/MoveToPlay.Companion.Smoke -c Release
+
+# 同时验证 C# 分块上传与云端 validate Worker
+dotnet run --project companion/MoveToPlay.Companion.Smoke -c Release -- `
+  data/zhq12.csv data/zhq12_events.csv
+```
 
 Dongle 在 Play 模式下枚举为 HID 键盘/鼠标与 CDC 虚拟串口复合设备。CDC 每 100 ms 发送一行 UTF-8 JSON，电脑端以换行符分包。当前协议版本为 1，内容包括：
 

@@ -56,8 +56,12 @@ static const char *TAG = "imu_main";
  * M2P_DONGLE_MODE:   0=view, 1=collect, 2=play
  * *_BOARD_STYLE:     0=current, 1=new
  */
+#ifndef M2P_BOARD_PROFILE
 #define M2P_BOARD_PROFILE             1
+#endif
+#ifndef M2P_DONGLE_MODE
 #define M2P_DONGLE_MODE               2
+#endif
 
 #define M2P_CHEST_BOARD_STYLE         1
 #define M2P_RIGHT_HAND_BOARD_STYLE    1
