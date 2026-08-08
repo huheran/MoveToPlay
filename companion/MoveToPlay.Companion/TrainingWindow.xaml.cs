@@ -35,14 +35,20 @@ public partial class TrainingWindow : Window
     private readonly ImuCollectionService _collector = new();
     private readonly EventCatalogService _eventCatalog = new();
     private readonly ObservableCollection<TrainingEventOption> _eventOptions = [];
+    private readonly ObservableCollection<LocalCollectionSession> _collectionSessions = [];
     private readonly TrainingHistoryService _history = new();
+    private readonly CollectionLibraryService _collectionLibrary;
+    private readonly FirmwareDeploymentService _firmwareDeployment = new();
     private SshTunnelService? _tunnel;
     private CloudTrainingApiClient? _api;
     private CancellationTokenSource? _operationCancellation;
     private CloudDataset? _activeDataset;
     private CloudJob? _activeJob;
     private CloudArtifact[] _artifacts = [];
+    private FirmwareBuildPackage? _firmwarePackage;
+    private CancellationTokenSource? _firmwareCancellation;
     private TrainingEventOption? _editingEvent;
+    private PreparedCollectionDataset? _preparedDataset;
     private bool _creatingEvent;
     private bool _telemetryPaused;
 
@@ -50,6 +56,7 @@ public partial class TrainingWindow : Window
     {
         _pauseTelemetry = pauseTelemetry;
         _resumeTelemetry = resumeTelemetry;
+        _collectionLibrary = new CollectionLibraryService(_eventCatalog);
         InitializeComponent();
         StateLabelSelector.ItemsSource = StateLabels;
         StateLabelSelector.SelectedIndex = 0;
@@ -62,18 +69,26 @@ public partial class TrainingWindow : Window
         BladeModeSelector.ItemsSource = BladeMarkingModes;
         BladeModeSelector.SelectedIndex = 0;
         if (Environment.GetCommandLineArgs().Any(argument =>
-                argument.Equals("--training-tab=cloud", StringComparison.OrdinalIgnoreCase)))
+                argument.Equals("--training-tab=data", StringComparison.OrdinalIgnoreCase)))
         {
             TrainingTabs.SelectedIndex = 1;
+        }
+        else if (Environment.GetCommandLineArgs().Any(argument =>
+                     argument.Equals("--training-tab=cloud", StringComparison.OrdinalIgnoreCase)))
+        {
+            TrainingTabs.SelectedIndex = 2;
         }
         CollectionRootText.Text = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "MoveToPlay", "collections");
         DatasetNameText.Text = $"决赛演示采集-{DateTime.Now:yyyy-MM-dd-HHmm}";
+        CollectionSessionList.ItemsSource = _collectionSessions;
         UpdateCollectorBladeSettings();
         _collector.StatusChanged += Collector_StatusChanged;
         Loaded += (_, _) =>
         {
             RefreshPorts();
+            RefreshFirmwarePorts();
+            RefreshCollectionLibrary();
             LoadCachedResult();
         };
         Closed += TrainingWindow_Closed;
@@ -105,6 +120,7 @@ public partial class TrainingWindow : Window
         if (dialog.ShowDialog() == Forms.DialogResult.OK)
         {
             CollectionRootText.Text = dialog.SelectedPath;
+            RefreshCollectionLibrary();
         }
     }
 
@@ -154,10 +170,113 @@ public partial class TrainingWindow : Window
         PortSelector.IsEnabled = true;
         if (_collector.SamplesPath is not null && _collector.EventsPath is not null)
         {
-            SamplesPathText.Text = _collector.SamplesPath;
-            EventsPathText.Text = _collector.EventsPath;
             CollectionFilesText.Text = $"samples: {_collector.SamplesPath}\nevents: {_collector.EventsPath}";
+            RefreshCollectionLibrary();
+            CollectionLibraryStatusText.Text = "新采集已加入列表，请在“我的采集数据”中勾选后进入训练";
+        }
+    }
+
+    private void RefreshCollectionLibrary_Click(object sender, RoutedEventArgs e) => RefreshCollectionLibrary();
+
+    private void RefreshCollectionLibrary()
+    {
+        var selectedIds = _collectionSessions.Where(item => item.IsSelected)
+            .Select(item => item.SessionId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _collectionSessions.Clear();
+        try
+        {
+            foreach (var session in _collectionLibrary.Load(CollectionRootText.Text))
+            {
+                session.IsSelected = selectedIds.Contains(session.SessionId);
+                _collectionSessions.Add(session);
+            }
+            CollectionLibraryRootText.Text = CollectionRootText.Text;
+            CollectionLibraryStatusText.Text = _collectionSessions.Count == 0
+                ? "还没有完整采集会话，请先完成一次采集"
+                : $"共 {_collectionSessions.Count} 次采集；勾选后可合并训练";
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            CollectionLibraryStatusText.Text = $"读取采集数据失败：{exception.Message}";
+        }
+    }
+
+    private void SelectAllCollections_Click(object sender, RoutedEventArgs e)
+    {
+        foreach (var session in _collectionSessions)
+        {
+            session.IsSelected = true;
+        }
+        CollectionLibraryStatusText.Text = $"已选择 {_collectionSessions.Count} 次采集";
+    }
+
+    private void ClearCollectionSelection_Click(object sender, RoutedEventArgs e)
+    {
+        foreach (var session in _collectionSessions)
+        {
+            session.IsSelected = false;
+        }
+        CollectionLibraryStatusText.Text = "已清除选择";
+    }
+
+    private void DeleteSelectedCollections_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = _collectionSessions.Where(item => item.IsSelected).ToArray();
+        if (selected.Length == 0)
+        {
+            MessageBox.Show(this, "请先勾选要删除的本地采集会话。", "没有选择", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        var confirmation = MessageBox.Show(
+            this,
+            $"将永久删除本机选中的 {selected.Length} 次采集及其中的 samples.csv、events.csv。\n\n官方基础数据、云端已上传数据和其他未选会话不会受影响。是否继续？",
+            "删除选中的本地采集数据",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (confirmation != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        var errors = new List<string>();
+        foreach (var session in selected)
+        {
+            try
+            {
+                _collectionLibrary.Delete(CollectionRootText.Text, session);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                errors.Add($"{session.SessionId}: {exception.Message}");
+            }
+        }
+        RefreshCollectionLibrary();
+        CollectionLibraryStatusText.Text = errors.Count == 0
+            ? $"已删除 {selected.Length} 次本地采集"
+            : $"部分删除失败：{string.Join("；", errors)}";
+    }
+
+    private void PrepareSelectedCollections_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = _collectionSessions.Where(item => item.IsSelected).ToArray();
+        try
+        {
+            _preparedDataset = _collectionLibrary.Prepare(CollectionRootText.Text, selected);
+            SamplesPathText.Text = _preparedDataset.SamplesPath;
+            EventsPathText.Text = _preparedDataset.EventsPath;
+            DatasetNameText.Text = $"玩家选定采集-{DateTime.Now:yyyy-MM-dd-HHmm}";
+            _activeDataset = null;
+            _activeJob = null;
+            CollectionLibraryStatusText.Text =
+                $"已合并 {_preparedDataset.SessionIds.Length} 次采集：样本 {_preparedDataset.SampleCount:N0}，标记 {_preparedDataset.EventCount:N0}";
+            TrainingTabs.SelectedIndex = 2;
+            JobStatusText.Text = "玩家数据已准备，连接服务器后即可上传训练";
             UpdateTrainEnabled();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            MessageBox.Show(this, exception.Message, "准备训练数据失败", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -436,9 +555,9 @@ public partial class TrainingWindow : Window
 
     private async void Train_Click(object sender, RoutedEventArgs e)
     {
-        if (!File.Exists(SamplesPathText.Text) || !File.Exists(EventsPathText.Text))
+        if (_preparedDataset is null || !File.Exists(SamplesPathText.Text) || !File.Exists(EventsPathText.Text))
         {
-            MessageBox.Show(this, "请选择有效的 samples.csv 和 events.csv。", "缺少数据", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(this, "请先到“我的采集数据”页面勾选会话并点击“使用选中数据进入训练”。", "缺少数据", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
         if (!await ConnectCloudAsync() || _api is null)
@@ -454,26 +573,13 @@ public partial class TrainingWindow : Window
             JobStatusText.Text = "正在计算文件哈希并登记数据集";
             if (_activeDataset is null || _activeDataset.Status != "uploading")
             {
-                var baseDatasetId = _history.LoadLastPassedDatasetId();
-                if (!string.IsNullOrWhiteSpace(baseDatasetId))
+                var systemConfig = await _api.GetSystemConfigAsync(cancellationToken);
+                var baseDatasetId = systemConfig.OfficialDatasetId;
+                if (string.IsNullOrWhiteSpace(baseDatasetId))
                 {
-                    try
-                    {
-                        var baseDataset = await _api.GetDatasetAsync(baseDatasetId, cancellationToken);
-                        if (!string.Equals(baseDataset.Status, "ready", StringComparison.Ordinal))
-                        {
-                            baseDatasetId = null;
-                        }
-                    }
-                    catch (Exception exception) when (exception is InvalidOperationException or HttpRequestException)
-                    {
-                        baseDatasetId = null;
-                    }
+                    throw new InvalidOperationException("服务器尚未配置只读官方训练数据集，已阻止本次训练以避免遗漏官方动作。 ");
                 }
-                if (!string.IsNullOrWhiteSpace(baseDatasetId))
-                {
-                    JobStatusText.Text = $"正在登记增量数据集，基础数据集 {baseDatasetId}";
-                }
+                JobStatusText.Text = $"正在把所选玩家会话叠加到官方数据集 {baseDatasetId}";
                 _activeDataset = await _api.CreateDatasetAsync(
                     string.IsNullOrWhiteSpace(DatasetNameText.Text) ? $"MoveToPlay-{DateTime.Now:yyyyMMdd-HHmm}" : DatasetNameText.Text.Trim(),
                     SamplesPathText.Text, EventsPathText.Text, baseDatasetId, cancellationToken);
@@ -533,6 +639,10 @@ public partial class TrainingWindow : Window
         ArtifactList.ItemsSource = _artifacts.Select(item => $"{item.Path}  ({item.Bytes:N0} B)").ToArray();
         DownloadArtifactsButton.IsEnabled = _artifacts.Length > 0;
         ApproveButton.IsEnabled = _activeJob.Status == "passed" && string.IsNullOrWhiteSpace(_activeJob.ApprovedAt);
+        BuildFirmwareButton.IsEnabled = _activeJob.Status == "passed" && !string.IsNullOrWhiteSpace(_activeJob.ApprovedAt);
+        FirmwareStatusText.Text = BuildFirmwareButton.IsEnabled
+            ? "模型已确认采用，可以生成 Dongle 固件"
+            : "等待训练通过并确认采用模型";
 
         var manifestArtifact = _artifacts.FirstOrDefault(item => item.Path == "run_manifest.json");
         if (manifestArtifact is null)
@@ -697,8 +807,8 @@ public partial class TrainingWindow : Window
             return;
         }
         var confirmation = MessageBox.Show(this,
-            "批准表示你已经查看准确率与质量门禁，同意将这次训练结果作为可下发模型。\n\n是否批准？",
-            "人工批准模型", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            "确认表示你已经查看准确率与质量门禁，同意把这次模型用于生成 Dongle 固件。\n\n是否采用？",
+            "确认采用本次模型", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (confirmation != MessageBoxResult.Yes)
         {
             return;
@@ -707,8 +817,8 @@ public partial class TrainingWindow : Window
         {
             _activeJob = await _api.ApproveAsync(_activeJob.Id, Environment.UserName);
             ApproveButton.IsEnabled = false;
-            ApproveButton.Content = $"已由 {_activeJob.ApprovedBy} 批准";
-            JobStatusText.Text = "模型已人工批准，可进入固件集成阶段";
+            ApproveButton.Content = $"已由 {_activeJob.ApprovedBy} 确认采用";
+            JobStatusText.Text = "模型已确认采用，可以生成 Dongle 固件";
             await RefreshArtifactsAndMetricsAsync(CancellationToken.None);
         }
         catch (Exception exception)
@@ -719,15 +829,135 @@ public partial class TrainingWindow : Window
 
     private void CancelTask_Click(object sender, RoutedEventArgs e) => _operationCancellation?.Cancel();
 
+    private void RefreshFirmwarePorts_Click(object sender, RoutedEventArgs e) => RefreshFirmwarePorts();
+
+    private void FirmwarePortSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        FlashFirmwareButton.IsEnabled = _firmwarePackage is not null && FirmwarePortSelector.SelectedItem is string;
+    }
+
+    private void RefreshFirmwarePorts()
+    {
+        var previous = FirmwarePortSelector.SelectedItem as string;
+        var ports = ImuCollectionService.GetPortNames();
+        FirmwarePortSelector.ItemsSource = ports;
+        FirmwarePortSelector.SelectedItem = ports.FirstOrDefault(port =>
+            port.Equals(previous, StringComparison.OrdinalIgnoreCase));
+        FlashFirmwareButton.IsEnabled = _firmwarePackage is not null && FirmwarePortSelector.SelectedItem is string;
+    }
+
+    private async void BuildFirmware_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeJob is null || _activeJob.Status != "passed" || string.IsNullOrWhiteSpace(_activeJob.ApprovedAt))
+        {
+            MessageBox.Show(this, "请先等待训练通过并点击“确认采用本次模型”。", "模型尚未确认", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        _firmwareCancellation?.Cancel();
+        _firmwareCancellation?.Dispose();
+        _firmwareCancellation = new CancellationTokenSource();
+        SetFirmwareBusy(true);
+        var progress = new Progress<FirmwareDeploymentProgress>(value =>
+            FirmwareStatusText.Text = $"{value.Stage}：{value.Detail}");
+        try
+        {
+            _firmwarePackage = await _firmwareDeployment.BuildDongleAsync(
+                _activeJob.Id,
+                _history.CacheDirectory(_activeJob.Id),
+                progress,
+                _firmwareCancellation.Token);
+            FirmwareStatusText.Text =
+                $"固件已生成：{_firmwarePackage.AppBytes / 1024d / 1024d:0.00} MiB；请选择蓝灯 Dongle 的串口后烧录";
+            RefreshFirmwarePorts();
+            FlashFirmwareButton.IsEnabled = FirmwarePortSelector.SelectedItem is string;
+        }
+        catch (OperationCanceledException)
+        {
+            FirmwareStatusText.Text = "固件生成已取消";
+        }
+        catch (Exception exception)
+        {
+            FirmwareStatusText.Text = "固件生成失败";
+            MessageBox.Show(this, exception.Message, "生成 Dongle 固件失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            SetFirmwareBusy(false);
+        }
+    }
+
+    private async void FlashFirmware_Click(object sender, RoutedEventArgs e)
+    {
+        if (_firmwarePackage is null)
+        {
+            MessageBox.Show(this, "请先生成包含新模型的 Dongle 固件。", "没有固件", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (FirmwarePortSelector.SelectedItem is not string port)
+        {
+            MessageBox.Show(this, "请让 Dongle 进入蓝灯 Wi-Fi 维护模式，然后刷新并选择烧录串口。", "没有串口", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        var confirmation = MessageBox.Show(
+            this,
+            $"确认 Dongle 已进入蓝灯维护模式，并将通过 {port} 烧录新模型固件。\n\n烧录期间请勿拔线。是否继续？",
+            "烧录 Dongle",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (confirmation != MessageBoxResult.Yes)
+        {
+            return;
+        }
+        _firmwareCancellation?.Cancel();
+        _firmwareCancellation?.Dispose();
+        _firmwareCancellation = new CancellationTokenSource();
+        SetFirmwareBusy(true);
+        var progress = new Progress<FirmwareDeploymentProgress>(value =>
+            FirmwareStatusText.Text = $"{value.Stage}：{value.Detail}");
+        try
+        {
+            await _firmwareDeployment.FlashDongleAsync(
+                _firmwarePackage,
+                port,
+                progress,
+                _firmwareCancellation.Token);
+            FirmwareStatusText.Text = "烧录完成；新动作将在此固件的 Wi-Fi 映射页面中出现并默认禁用";
+            MessageBox.Show(this, "新模型固件已烧录完成。请让 Dongle 重启回绿色 Play，再进入 Wi-Fi 页面配置新增动作的按键。", "烧录完成", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (OperationCanceledException)
+        {
+            FirmwareStatusText.Text = "烧录已取消；请重新进入维护模式后重试";
+        }
+        catch (Exception exception)
+        {
+            FirmwareStatusText.Text = "烧录失败；Dongle 保持维护模式，可重新烧录";
+            MessageBox.Show(this, exception.Message, "烧录 Dongle 失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            SetFirmwareBusy(false);
+        }
+    }
+
+    private void SetFirmwareBusy(bool busy)
+    {
+        BuildFirmwareButton.IsEnabled = !busy && _activeJob is
+        { Status: "passed", ApprovedAt: not null };
+        FlashFirmwareButton.IsEnabled = !busy && _firmwarePackage is not null && FirmwarePortSelector.SelectedItem is string;
+        FirmwarePortSelector.IsEnabled = !busy;
+    }
+
     private void UpdateTrainEnabled()
     {
-        TrainButton.IsEnabled = _api is not null && File.Exists(SamplesPathText.Text) && File.Exists(EventsPathText.Text)
+        TrainButton.IsEnabled = _api is not null && _preparedDataset is not null &&
+            File.Exists(SamplesPathText.Text) && File.Exists(EventsPathText.Text)
             && _operationCancellation is null;
     }
 
     private void SetOperationRunning(bool running)
     {
-        TrainButton.IsEnabled = !running && _api is not null && File.Exists(SamplesPathText.Text) && File.Exists(EventsPathText.Text);
+        TrainButton.IsEnabled = !running && _api is not null && _preparedDataset is not null &&
+            File.Exists(SamplesPathText.Text) && File.Exists(EventsPathText.Text);
         CancelTaskButton.IsEnabled = running;
         ConnectCloudButton.IsEnabled = !running;
     }
@@ -761,6 +991,8 @@ public partial class TrainingWindow : Window
     private void TrainingWindow_Closed(object? sender, EventArgs e)
     {
         _operationCancellation?.Cancel();
+        _firmwareCancellation?.Cancel();
+        _firmwareCancellation?.Dispose();
         _collector.StatusChanged -= Collector_StatusChanged;
         _collector.Dispose();
         ResumeTelemetry();

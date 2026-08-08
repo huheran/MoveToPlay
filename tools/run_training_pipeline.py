@@ -14,6 +14,7 @@ import importlib.metadata
 import json
 import os
 import platform
+import re
 import shlex
 import subprocess
 import sys
@@ -348,6 +349,23 @@ def quality_gate(
         classes_ok,
         class_names,
         f"contains {required_classes}" if allow_extra_classes else required_classes,
+    )
+    max_class_count = int(quality.get("max_class_count", 255))
+    add_check(
+        "firmware_class_count",
+        len(class_names) <= max_class_count,
+        len(class_names),
+        f"<={max_class_count}",
+    )
+    firmware_class_names_ok = all(
+        re.fullmatch(r"[a-z][a-z0-9_]{0,30}", name) is not None
+        for name in class_names
+    )
+    add_check(
+        "firmware_class_name_format",
+        firmware_class_names_ok,
+        class_names,
+        "lowercase action IDs, 1-31 chars",
     )
     add_check(
         "feature_count",

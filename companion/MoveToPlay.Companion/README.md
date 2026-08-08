@@ -2,7 +2,7 @@
 
 这是 MoveToPlay 的 Windows 桌面端运动伴侣。当前版本默认通过 Dongle 的 USB CDC 复合接口接收真实动作数据，同时保留显式模拟模式用于没有硬件时预览界面。
 
-主窗口的“数据采集与云端训练”入口还可以读取 Dongle 运行时采集态的原始六轴数据、维护可编辑动作事件库、预选本次动作，并用 Blade 单击完成即时或倒计时标记。Tracker 与 Blade 使用统一 Dongle 接收时间对齐，即时方式支持延迟补偿；事件库保存在“文档/MoveToPlay/event_catalog.json”。软件生成两张训练 CSV，并经 Windows OpenSSH 自动连接云端；新会话可基于最后一个已通过数据集增量合并，保留旧动作并训练新增动作。统一 Dongle 固件每次长按按钮 2 秒按“绿色 Play → 橙色采集 → 蓝色 Wi-Fi → 重启回绿色 Play”循环，不再为采集单独烧录固件。软件支持分块续传、Job 状态与指标展示、产物下载、本机关键模型缓存和人工批准。API 令牌只通过已有 SSH 身份读取到内存，不写入工程或明文配置；云端 API 继续只监听服务器 `127.0.0.1:8000`，决赛演示不需要域名或备案。
+主窗口的“数据采集与云端训练”入口还可以读取 Dongle 运行时采集态的原始六轴数据、维护可编辑动作事件库、预选本次动作，并用 Blade 单击完成即时或倒计时标记。Tracker 与 Blade 使用统一 Dongle 接收时间对齐，即时方式支持延迟补偿；事件库保存在“文档/MoveToPlay/event_catalog.json”。“我的采集数据”按会话列出全部本地历史记录，玩家可任意勾选合并、定向删除自己的会话；每次提交训练都必须先经过该页。所选玩家会话只叠加到服务器固定的只读官方数据集，官方数据不会被删改或重复累积。统一 Dongle 固件每次长按按钮 2 秒按“绿色 Play → 橙色采集 → 蓝色 Wi-Fi → 重启回绿色 Play”循环，不再为采集单独烧录固件。训练通过且玩家确认采用后，软件会下载并校验模型 C 数组，在本机隔离工作区生成 Dongle 固件；用户选择蓝灯维护模式的串口并再次确认后即可烧录。API 令牌只通过已有 SSH 身份读取到内存，不写入工程或明文配置；云端 API 继续只监听服务器 `127.0.0.1:8000`，决赛演示不需要域名或备案。
 
 - 透明置顶、鼠标点击穿透的游戏悬浮层；
 - 自动跟随目标游戏窗口；
@@ -48,6 +48,13 @@ dotnet run --project companion/MoveToPlay.Companion/MoveToPlay.Companion.csproj 
 
 ```powershell
 dotnet run --project companion/MoveToPlay.Companion.Smoke -c Release
+
+# 验证本地采集会话的扫描、选择合并和定向删除
+dotnet run --project companion/MoveToPlay.Companion.Smoke -c Release -- --collection-library
+
+# 验证模型 C 数组能编译成完整 Dongle 固件（不烧录）
+dotnet run --project companion/MoveToPlay.Companion.Smoke -c Release -- `
+  --firmware-build local-test output/training-runs/local-full-v1b
 
 # 同时验证 C# 分块上传与云端 validate Worker
 dotnet run --project companion/MoveToPlay.Companion.Smoke -c Release -- `

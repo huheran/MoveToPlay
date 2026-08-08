@@ -74,6 +74,12 @@ public sealed class CloudArtifact
     public string? Sha256 { get; init; }
 }
 
+public sealed class CloudSystemConfig
+{
+    [JsonPropertyName("official_dataset_id")]
+    public string? OfficialDatasetId { get; init; }
+}
+
 public sealed record CloudUploadProgress(
     string Stage,
     long CompletedBytes,

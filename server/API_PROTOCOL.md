@@ -8,6 +8,8 @@ Authorization: Bearer <token>
 
 ## 数据集流程
 
+`GET /api/v1/system-config` 返回服务器固定的 `official_dataset_id`。Companion 每次只把玩家在“我的采集数据”中勾选的会话叠加到这个只读官方数据集，不会把上一次玩家训练结果继续作为基础数据，因而不会重复累计历史会话。
+
 1. `POST /api/v1/datasets`：声明 samples/events 的文件名、字节数和 SHA-256，获得 dataset ID。
 2. `PUT /api/v1/datasets/{id}/files/samples`：上传原始二进制块，并提供 `X-Upload-Offset`。
 3. `PUT /api/v1/datasets/{id}/files/events`：同上。
@@ -72,7 +74,7 @@ queued -> running -> validated   （仅校验）
 }
 ```
 
-`approved` 目前只记录人工决策，不会自动写入固件或下发设备。后续设备升级接口只能选择已经 `passed` 且存在 `approved_at` 的任务。
+`approved` 记录人工决策。Companion 只允许对 `passed` 且存在 `approved_at` 的任务下载已校验 C 数组、生成 Dongle 固件，并在用户再次确认串口后烧录设备。
 
 ## 持久目录
 

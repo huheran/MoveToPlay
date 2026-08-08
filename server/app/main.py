@@ -108,6 +108,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     protected = [Depends(require_api_token)]
 
+    @application.get("/api/v1/system-config", dependencies=protected)
+    def system_config(request: Request) -> dict[str, str | None]:
+        official_dataset_id = request.app.state.settings.official_dataset_id
+        if official_dataset_id is not None:
+            official = request.app.state.database.get_dataset(official_dataset_id)
+            if official is None or official["status"] != "ready":
+                raise HTTPException(
+                    status_code=503,
+                    detail="official dataset is missing or not ready",
+                )
+        return {"official_dataset_id": official_dataset_id}
+
     @application.post("/api/v1/datasets", status_code=201, dependencies=protected)
     def create_dataset(payload: DatasetCreate, request: Request) -> dict:
         maximum = request.app.state.settings.max_file_bytes
