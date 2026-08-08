@@ -22,8 +22,3 @@ idf_component_register(SRCS "app_main.c"
                           esp_timer
                           esp_wifi
                           nvs_flash)
-
-# This cache value lets each board/profile get an isolated build directory.
-set(M2P_BOARD_PROFILE "1" CACHE STRING "1=dongle, 2=blade, 3=chest, 4=right hand, 5=left hand, 6=leg")
-target_compile_definitions(${COMPONENT_LIB} PRIVATE
-    M2P_BOARD_PROFILE=${M2P_BOARD_PROFILE})
