@@ -30,16 +30,6 @@ public partial class TrainingWindow : Window
         new(BladeMarkingMode.Countdown, "倒计时提示音（推荐）"),
     ];
 
-    private static readonly TrainingLabelOption[] EventGroupOptions =
-    [
-        new("attack_event", "攻击动作"),
-        new("skill_event", "技能动作"),
-        new("jump_event", "跳跃动作"),
-        new("turn_event", "转向动作"),
-        new("pause_event", "暂停/菜单动作"),
-        new("custom_event", "自定义/其他"),
-    ];
-
     private readonly Action _pauseTelemetry;
     private readonly Action _resumeTelemetry;
     private readonly ImuCollectionService _collector = new();
@@ -67,7 +57,6 @@ public partial class TrainingWindow : Window
         {
             _eventOptions.Add(option);
         }
-        EventGroupSelector.ItemsSource = EventGroupOptions;
         EventSelector.ItemsSource = _eventOptions;
         EventSelector.SelectedIndex = _eventOptions.Count > 0 ? 0 : -1;
         BladeModeSelector.ItemsSource = BladeMarkingModes;
@@ -198,8 +187,6 @@ public partial class TrainingWindow : Window
             _creatingEvent = false;
             EventDisplayNameText.Text = marker.DisplayName;
             EventTypeText.Text = marker.Type;
-            EventGroupSelector.SelectedItem = EventGroupOptions.FirstOrDefault(option =>
-                option.Id.Equals(marker.Group, StringComparison.Ordinal)) ?? EventGroupOptions[^1];
             SaveEventOptionButton.Content = "保存修改";
             DeleteEventOptionButton.IsEnabled = true;
         }
@@ -218,7 +205,6 @@ public partial class TrainingWindow : Window
         EventSelector.SelectedIndex = -1;
         EventDisplayNameText.Text = "";
         EventTypeText.Text = NextCustomActionId();
-        EventGroupSelector.SelectedItem = EventGroupOptions[^1];
         SaveEventOptionButton.Content = "创建动作";
         DeleteEventOptionButton.IsEnabled = false;
         EventDisplayNameText.Focus();
@@ -228,7 +214,7 @@ public partial class TrainingWindow : Window
     private void SaveEventOption_Click(object sender, RoutedEventArgs e)
     {
         var wasCreating = _creatingEvent;
-        var group = (EventGroupSelector.SelectedItem as TrainingLabelOption)?.Id ?? "custom_event";
+        var group = _editingEvent?.Group ?? "custom_event";
         var option = new TrainingEventOption(
             group,
             EventTypeText.Text.Trim().ToLowerInvariant(),
