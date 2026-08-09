@@ -5,7 +5,13 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from app.database import Database
-from app.firmware import _package_build
+from app.firmware import NINJA_PROGRESS_PATTERN, _package_build
+
+
+def test_ninja_progress_ignores_component_manager_notices() -> None:
+    assert NINJA_PROGRESS_PATTERN.search("NOTICE: [3/3] idf (5.5.2)") is None
+    match = NINJA_PROGRESS_PATTERN.search("[612/945] Building C object")
+    assert match is not None and match.groups() == ("612", "945")
 
 
 def test_firmware_package_contains_verified_flash_set(tmp_path: Path) -> None:

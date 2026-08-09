@@ -32,7 +32,7 @@ PROJECT_FILES = (
 BOARD_PROFILE_PATTERN = re.compile(
     r"^#define\s+M2P_BOARD_PROFILE\s+\d+\s*$", re.MULTILINE
 )
-NINJA_PROGRESS_PATTERN = re.compile(r"\[(\d+)\s*/\s*(\d+)\]")
+NINJA_PROGRESS_PATTERN = re.compile(r"^\[(\d+)\s*/\s*(\d+)\]")
 ProgressCallback = Callable[[str, str, float], None]
 
 
