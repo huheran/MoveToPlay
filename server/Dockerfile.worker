@@ -1,5 +1,6 @@
-# 官方 ESP-IDF 自动构建镜像；摘要固定，保证云端构建环境可复现。
-FROM espressif/idf:v5.5.2@sha256:88a65f412e730fdbe134cd7427dd840eb1a6923479499c9c233699f804a3096b
+# 使用乐鑫官方 v5.5.2 完整源码包，并只安装本项目需要的 ESP32-S3 工具链。
+# 官方压缩包 SHA-256 来自该版本 GitHub Release 的资产摘要。
+FROM public.ecr.aws/docker/library/python:3.13.9-slim-bookworm@sha256:b685a4fa58bb19d1814d78a1ec0f0208f351452724f78b20212c984d6e124a34
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -11,12 +12,28 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DEFAULT_TIMEOUT=60 \
     PIP_RETRIES=5 \
     PIP_ROOT_USER_ACTION=ignore \
-    HOME=/tmp/movetoplay-worker
+    HOME=/tmp/movetoplay-worker \
+    IDF_PATH=/opt/esp/idf \
+    IDF_TOOLS_PATH=/opt/esp/tools
 
 WORKDIR /workspace
 
 COPY training/requirements.txt /tmp/movetoplay-training-requirements.txt
-RUN python -m pip install --no-cache-dir --requirement /tmp/movetoplay-training-requirements.txt \
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        bison ca-certificates ccache cmake curl dfu-util flex g++ gcc git gperf \
+        libffi-dev libssl-dev libusb-1.0-0 make ninja-build unzip \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /opt/esp \
+    && curl --fail --location --retry 5 \
+        https://dl.espressif.com/github_assets/espressif/esp-idf/releases/download/v5.5.2/esp-idf-v5.5.2.zip \
+        --output /tmp/esp-idf.zip \
+    && echo "2c7b0f38185a74eac04f1a7c7e09786cac5e271f76ffc4e672c2e5735e626e1d  /tmp/esp-idf.zip" | sha256sum --check --strict \
+    && unzip -q /tmp/esp-idf.zip -d /opt/esp \
+    && mv /opt/esp/esp-idf-v5.5.2 /opt/esp/idf \
+    && rm /tmp/esp-idf.zip \
+    && /opt/esp/idf/install.sh esp32s3 \
+    && /bin/bash -c 'source /opt/esp/idf/export.sh && python -m pip install --no-cache-dir --requirement /tmp/movetoplay-training-requirements.txt' \
     && mkdir -p /tmp/movetoplay-worker \
     && chown -R 1000:1000 /tmp/movetoplay-worker
 
@@ -24,4 +41,4 @@ COPY --chown=1000:1000 . /workspace
 
 USER 1000:1000
 
-CMD ["python", "-m", "app.worker"]
+CMD ["/bin/bash", "-lc", "source /opt/esp/idf/export.sh && exec python -m app.worker"]
