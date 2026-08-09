@@ -145,7 +145,8 @@ public sealed partial class FirmwareDeploymentService
         {
             startInfo.ArgumentList.Add(value);
         }
-        foreach (var file in package.Files.OrderBy(file => Convert.ToInt32(file.Offset, 16)))
+        foreach (var file in package.Files.OrderBy(file =>
+                     int.Parse(file.Offset.AsSpan(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture)))
         {
             startInfo.ArgumentList.Add(file.Offset);
             startInfo.ArgumentList.Add(file.Path);
