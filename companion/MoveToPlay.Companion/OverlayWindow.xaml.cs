@@ -44,6 +44,7 @@ public partial class OverlayWindow : Window
     public nint TargetHandle { get; set; }
     public bool FollowTarget { get; set; } = true;
     public bool HideWhenTargetInactive { get; set; } = true;
+    public bool EditingMode { get; set; }
 
     public void ApplyProfile(GameProfile profile)
     {
@@ -95,7 +96,9 @@ public partial class OverlayWindow : Window
                 screen.Width,
                 screen.Height);
             _windowService.PlaceTopmost(_windowHandle, screenBounds);
-            OverlayRoot.Opacity = !HideWhenTargetInactive || _windowService.IsTargetForeground(TargetHandle) ? 1.0 : 0.0;
+            OverlayRoot.Opacity = EditingMode || !HideWhenTargetInactive || _windowService.IsTargetForeground(TargetHandle)
+                ? 1.0
+                : 0.0;
             return;
         }
 

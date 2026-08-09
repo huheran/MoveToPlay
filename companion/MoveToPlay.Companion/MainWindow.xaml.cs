@@ -697,7 +697,15 @@ public partial class MainWindow : Window
         {
             Owner = this,
         };
-        _overlayControlWindow.Closed += (_, _) => _overlayControlWindow = null;
+        _overlayControlWindow.Closed += (_, _) =>
+        {
+            _overlayControlWindow = null;
+            if (_overlayWindow is not null)
+            {
+                _overlayWindow.EditingMode = false;
+                _overlayWindow.RefreshPosition();
+            }
+        };
         _overlayControlWindow.Show();
     }
 
@@ -752,8 +760,10 @@ public partial class MainWindow : Window
     private void EnsureOverlayVisibleForEditing()
     {
         EnsureOverlayWindow();
+        _overlayWindow!.EditingMode = true;
         if (_overlayWindow!.IsVisible)
         {
+            _overlayWindow.RefreshPosition();
             return;
         }
 
