@@ -19,7 +19,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /workspace
 
 COPY training/requirements.txt /tmp/movetoplay-training-requirements.txt
-RUN apt-get update \
+RUN sed -i \
+        -e 's|http://deb.debian.org/debian-security|https://mirrors.aliyun.com/debian-security|g' \
+        -e 's|http://deb.debian.org/debian|https://mirrors.aliyun.com/debian|g' \
+        /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
     && apt-get install --yes --no-install-recommends \
         bison ca-certificates ccache cmake curl dfu-util flex g++ gcc git gperf \
         libffi-dev libssl-dev libusb-1.0-0 make ninja-build unzip \
