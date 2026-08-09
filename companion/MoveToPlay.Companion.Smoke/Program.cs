@@ -80,6 +80,12 @@ if (!await api.CheckHealthAsync())
 {
     throw new InvalidOperationException("健康检查失败");
 }
+if (args.Length == 2 && args[0].Equals("--firmware-request", StringComparison.OrdinalIgnoreCase))
+{
+    var firmwareJob = await api.RequestFirmwareAsync(args[1]);
+    Console.WriteLine($"[smoke] 固件 API PASS：{firmwareJob.Id} status={firmwareJob.FirmwareStatus}");
+    return;
+}
 var jobs = await api.ListJobsAsync();
 Console.WriteLine($"[smoke] 健康检查通过，云端任务数={jobs.Length}");
 var latest = jobs.FirstOrDefault(job => job.Status == "passed") ?? jobs.FirstOrDefault();
