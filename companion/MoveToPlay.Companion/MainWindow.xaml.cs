@@ -770,6 +770,7 @@ public partial class MainWindow : Window
         _overlayWindow.Show();
         _overlayWindow.RefreshPosition();
         ToggleOverlayButton.Content = "隐藏悬浮层";
+        DashboardToggleOverlayButton.Content = "隐藏悬浮层";
         OverlayStateText.Text = "正在全屏显示";
     }
 
@@ -867,6 +868,7 @@ public partial class MainWindow : Window
         {
             _overlayWindow.Hide();
             ToggleOverlayButton.Content = "显示悬浮层";
+            DashboardToggleOverlayButton.Content = "显示悬浮层";
             OverlayStateText.Text = "当前未显示";
         }
         else
@@ -875,6 +877,7 @@ public partial class MainWindow : Window
             _overlayWindow.RefreshPosition();
             _overlayWindow.ShowEncouragement();
             ToggleOverlayButton.Content = "隐藏悬浮层";
+            DashboardToggleOverlayButton.Content = "隐藏悬浮层";
             OverlayStateText.Text = "正在全屏显示";
         }
         _overlayControlWindow?.RefreshOverlayStatus();
@@ -903,6 +906,7 @@ public partial class MainWindow : Window
         {
             _overlayWindow.Show();
             ToggleOverlayButton.Content = "隐藏悬浮层";
+            DashboardToggleOverlayButton.Content = "隐藏悬浮层";
             OverlayStateText.Text = "正在全屏显示";
         }
         _overlayWindow.ShowEncouragement();
