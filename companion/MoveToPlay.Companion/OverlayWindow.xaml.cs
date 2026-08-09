@@ -7,6 +7,7 @@ using System.Windows.Threading;
 using MoveToPlay.Companion.Models;
 using MoveToPlay.Companion.Services;
 using MoveToPlay.Companion.ViewModels;
+using Forms = System.Windows.Forms;
 
 namespace MoveToPlay.Companion;
 
@@ -74,20 +75,27 @@ public partial class OverlayWindow : Window
             return;
         }
 
-        if (FollowTarget && TargetHandle != nint.Zero && _windowService.TryGetClientBounds(TargetHandle, out var bounds))
+        if (FollowTarget && TargetHandle != nint.Zero)
         {
-            _windowService.PlaceTopmost(_windowHandle, bounds);
+            var screen = Forms.Screen.FromHandle(TargetHandle).Bounds;
+            var screenBounds = new GameWindowService.WindowBounds(
+                screen.Left,
+                screen.Top,
+                screen.Width,
+                screen.Height);
+            _windowService.PlaceTopmost(_windowHandle, screenBounds);
             OverlayRoot.Opacity = !HideWhenTargetInactive || _windowService.IsTargetForeground(TargetHandle) ? 1.0 : 0.0;
             return;
         }
 
         OverlayRoot.Opacity = 1.0;
-        var previewBounds = new GameWindowService.WindowBounds(
-            (int)SystemParameters.VirtualScreenLeft,
-            (int)SystemParameters.VirtualScreenTop,
-            (int)SystemParameters.PrimaryScreenWidth,
-            (int)SystemParameters.PrimaryScreenHeight);
-        _windowService.PlaceTopmost(_windowHandle, previewBounds);
+        var primaryScreen = Forms.Screen.PrimaryScreen?.Bounds;
+        var primaryScreenBounds = new GameWindowService.WindowBounds(
+            primaryScreen?.Left ?? 0,
+            primaryScreen?.Top ?? 0,
+            primaryScreen?.Width ?? (int)SystemParameters.PrimaryScreenWidth,
+            primaryScreen?.Height ?? (int)SystemParameters.PrimaryScreenHeight);
+        _windowService.PlaceTopmost(_windowHandle, primaryScreenBounds);
     }
 
     public void ShowEncouragement()
