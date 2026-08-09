@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse
 from .config import Settings
 from .database import Database
 from .oss_backup import backup_approved_model, remove_backup_staging
-from .schemas import ApprovalCreate, DatasetCreate, JobCreate
+from .schemas import ApprovalCreate, DatasetCreate, FirmwareBuildCreate, JobCreate
 from .storage import dataset_dir, dataset_file, sha256_file, validate_csv_header
 
 
@@ -71,6 +71,11 @@ def job_response(row: dict) -> dict:
             "oss_backed_up_at",
             "oss_backup_error",
             "artifacts_cleaned_at",
+            "firmware_status",
+            "firmware_detail",
+            "firmware_progress_percent",
+            "firmware_built_at",
+            "firmware_error",
         )
     }
     elapsed = 0
@@ -375,6 +380,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
         return job_response(approved)
 
+    @application.post("/api/v1/jobs/{job_id}/firmware", dependencies=protected)
+    def build_firmware(job_id: str, payload: FirmwareBuildCreate, request: Request) -> dict:
+        row = request.app.state.database.get_job(job_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="job not found")
+        if not request.app.state.database.queue_firmware_build(job_id, force=payload.force):
+            raise HTTPException(
+                status_code=409, detail="only a passed training job can build firmware"
+            )
+        queued = request.app.state.database.get_job(job_id)
+        assert queued is not None
+        return job_response(queued)
+
     @application.get("/api/v1/models", dependencies=protected)
     def list_models(request: Request) -> list[dict]:
         return [job_response(row) for row in request.app.state.database.list_models()]
@@ -409,7 +427,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             {
                 "path": path.relative_to(base).as_posix(),
                 "bytes": path.stat().st_size,
-                "sha256": manifest_hashes.get(path.relative_to(base).as_posix()),
+                "sha256": manifest_hashes.get(path.relative_to(base).as_posix()) or sha256_file(path),
             }
             for path in sorted(base.rglob("*"))
             if path.is_file()

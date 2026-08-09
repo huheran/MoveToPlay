@@ -390,7 +390,7 @@
                                 <StackPanel>
                                     <TextBlock FontWeight="SemiBold" Text="更新 Dongle 模型固件" />
                                     <TextBlock Margin="0,5,0,8" FontSize="10" Foreground="#FF8291A7" TextWrapping="Wrap"
-                                               Text="先确认采用模型并生成固件；再让 Dongle 进入蓝灯维护模式，选择其烧录串口。" />
+                                               Text="服务器把模型编译成完整固件；电脑端下载并校验后，用内置工具直接烧录，无需 ESP-IDF。" />
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
@@ -401,7 +401,7 @@
                                     </Grid>
                                     <StackPanel Margin="0,9,0,0" Orientation="Horizontal">
                                         <Button x:Name="BuildFirmwareButton" IsEnabled="False"
-                                                Content="1. 生成 Dongle 固件" Click="BuildFirmware_Click" />
+                                                Content="1. 下载并校验云端固件" Click="BuildFirmware_Click" />
                                         <Button x:Name="FlashFirmwareButton" IsEnabled="False" Style="{StaticResource Primary}"
                                                 Content="2. 烧录到 Dongle" Click="FlashFirmware_Click" />
                                     </StackPanel>
@@ -432,7 +432,7 @@
                             <StackPanel>
                                 <TextBlock FontSize="18" FontWeight="SemiBold" Text="模型版本库与历史任务" />
                                 <TextBlock Margin="0,6,0,0" Foreground="#FF8291A7" TextWrapping="Wrap"
-                                           Text="已批准模型永久保留并可重新生成固件；未批准旧任务按服务器清理规则自动整理。" />
+                                           Text="已批准模型永久保留其云端固件；未批准旧任务按服务器清理规则自动整理。" />
                             </StackPanel>
                             <Button Grid.Column="1" x:Name="RefreshHistoryButton" VerticalAlignment="Center"
                                     Style="{StaticResource Primary}" Content="刷新云端列表" Click="RefreshHistory_Click" />
@@ -499,7 +499,7 @@
                                 <StackPanel>
                                     <TextBlock FontSize="16" FontWeight="SemiBold" Text="已批准模型版本" />
                                     <TextBlock Margin="0,5,0,10" Foreground="#FF8291A7"
-                                               Text="选择任意历史版本，可重新生成固件或烧录回滚。" />
+                                               Text="选择任意历史版本，可让云端重新编译固件或下载烧录回滚。" />
                                 </StackPanel>
                                 <ListBox x:Name="ModelVersionList" Grid.Row="1" Background="Transparent" BorderThickness="0"
                                          SelectionChanged="ModelVersionList_SelectionChanged">
@@ -535,7 +535,7 @@
                                         <Button x:Name="LoadModelVersionButton" IsEnabled="False"
                                                 Content="选择此模型" Click="LoadSelectedModel_Click" />
                                         <Button x:Name="RebuildModelFirmwareButton" IsEnabled="False"
-                                                Content="重新生成固件" Click="RebuildSelectedModel_Click" />
+                                                Content="云端重新编译固件" Click="RebuildSelectedModel_Click" />
                                         <Button x:Name="RollbackModelButton" IsEnabled="False" Style="{StaticResource Primary}"
                                                 Content="一键回滚并烧录" Click="RollbackSelectedModel_Click" />
                                     </WrapPanel>

@@ -107,6 +107,21 @@ public sealed class CloudJob
     [JsonPropertyName("artifacts_cleaned_at")]
     public string? ArtifactsCleanedAt { get; init; }
 
+    [JsonPropertyName("firmware_status")]
+    public string FirmwareStatus { get; init; } = "not_requested";
+
+    [JsonPropertyName("firmware_detail")]
+    public string? FirmwareDetail { get; init; }
+
+    [JsonPropertyName("firmware_progress_percent")]
+    public double FirmwareProgressPercent { get; init; }
+
+    [JsonPropertyName("firmware_built_at")]
+    public string? FirmwareBuiltAt { get; init; }
+
+    [JsonPropertyName("firmware_error")]
+    public string? FirmwareError { get; init; }
+
     public string ShortId => Id.Length > 8 ? Id[..8] : Id;
     public string CreatedDisplay => DateTimeOffset.TryParse(CreatedAt, out var value)
         ? value.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
@@ -132,6 +147,14 @@ public sealed class CloudJob
         "failed" => "OSS 备份失败",
         "not_configured" => "OSS 未配置",
         _ => "等待 OSS 备份",
+    };
+    public string FirmwareDisplay => FirmwareStatus switch
+    {
+        "queued" => "固件排队中",
+        "building" => $"固件编译中 {FirmwareProgressPercent:0}%",
+        "ready" => "云端固件可下载",
+        "failed" => "固件编译失败",
+        _ => "尚未生成固件",
     };
 }
 

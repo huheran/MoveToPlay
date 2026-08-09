@@ -77,7 +77,12 @@ class Database:
                     oss_object_key TEXT,
                     oss_backed_up_at TEXT,
                     oss_backup_error TEXT,
-                    artifacts_cleaned_at TEXT
+                    artifacts_cleaned_at TEXT,
+                    firmware_status TEXT NOT NULL DEFAULT 'not_requested',
+                    firmware_detail TEXT,
+                    firmware_progress_percent REAL NOT NULL DEFAULT 0,
+                    firmware_built_at TEXT,
+                    firmware_error TEXT
                 );
 
                 CREATE INDEX IF NOT EXISTS jobs_status_created_idx
@@ -111,6 +116,11 @@ class Database:
                 "oss_backed_up_at": "TEXT",
                 "oss_backup_error": "TEXT",
                 "artifacts_cleaned_at": "TEXT",
+                "firmware_status": "TEXT NOT NULL DEFAULT 'not_requested'",
+                "firmware_detail": "TEXT",
+                "firmware_progress_percent": "REAL NOT NULL DEFAULT 0",
+                "firmware_built_at": "TEXT",
+                "firmware_error": "TEXT",
             }
             for name, definition in migrations.items():
                 if name not in job_columns:
@@ -262,7 +272,71 @@ class Database:
                    progress_percent = 0, estimated_remaining_seconds = NULL
                    WHERE status = 'running'"""
             )
+            connection.execute(
+                """UPDATE jobs SET firmware_status = 'queued',
+                   firmware_detail = '服务重启后已重新排队', firmware_progress_percent = 0
+                   WHERE firmware_status = 'building'"""
+            )
             return cursor.rowcount
+
+    def queue_firmware_build(self, job_id: str, *, force: bool = False) -> bool:
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if row is None or row["status"] != "passed" or row["mode"] != "train":
+                return False
+            if row["firmware_status"] in {"queued", "building"}:
+                return True
+            if row["firmware_status"] == "ready" and not force:
+                return True
+            connection.execute(
+                """UPDATE jobs SET firmware_status = 'queued',
+                   firmware_detail = '等待云端固件编译', firmware_progress_percent = 0,
+                   firmware_error = NULL WHERE id = ?""",
+                (job_id,),
+            )
+            return True
+
+    def claim_next_firmware_job(self) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """SELECT * FROM jobs WHERE firmware_status = 'queued' AND status = 'passed'
+                   ORDER BY COALESCE(approved_at, finished_at, created_at), id LIMIT 1"""
+            ).fetchone()
+            if row is None:
+                return None
+            connection.execute(
+                """UPDATE jobs SET firmware_status = 'building',
+                   firmware_detail = '正在准备云端固件编译', firmware_progress_percent = 2,
+                   firmware_error = NULL WHERE id = ? AND firmware_status = 'queued'""",
+                (row["id"],),
+            )
+            return self._row(connection.execute("SELECT * FROM jobs WHERE id = ?", (row["id"],)).fetchone())
+
+    def update_firmware_progress(self, job_id: str, detail: str, percent: float) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """UPDATE jobs SET firmware_detail = ?, firmware_progress_percent = ?
+                   WHERE id = ? AND firmware_status = 'building'""",
+                (detail[:500], max(0.0, min(99.0, percent)), job_id),
+            )
+
+    def finish_firmware_build(self, job_id: str, error: str | None = None) -> None:
+        ready = error is None
+        with self.connect() as connection:
+            connection.execute(
+                """UPDATE jobs SET firmware_status = ?, firmware_detail = ?,
+                   firmware_progress_percent = ?, firmware_built_at = ?, firmware_error = ?
+                   WHERE id = ?""",
+                (
+                    "ready" if ready else "failed",
+                    "云端固件已编译、打包并通过完整性校验" if ready else "云端固件编译失败",
+                    100 if ready else 0,
+                    utc_now() if ready else None,
+                    error[:4000] if error else None,
+                    job_id,
+                ),
+            )
 
     def finish_job(self, job_id: str, status: str, run_dir: str | None, error: str | None) -> None:
         stage = "completed" if status in {"passed", "validated"} else "failed"

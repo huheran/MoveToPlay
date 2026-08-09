@@ -80,8 +80,10 @@ queued -> running -> validated   （仅校验）
 }
 ```
 
-`approved` 记录人工决策。Companion 只允许对 `passed` 且存在 `approved_at` 的任务下载已校验 C 数组、生成 Dongle 固件，并在用户再次确认串口后烧录设备。
+`approved` 记录人工决策。训练通过后 worker 自动把已校验 C 数组集成进 Dongle 工程，在固定 ESP-IDF 环境中编译并生成 `firmware/firmware-bundle.zip`。Companion 只允许对 `passed` 且存在 `approved_at` 的任务下载并校验完整固件包，并在用户再次确认串口后调用内置烧录工具。
 批准时服务器分配不可变的 `model_version`，将它设为当前版本，并在配置 OSS 后异步归档完整运行目录。
+
+历史任务可通过 `POST /api/v1/jobs/{job_id}/firmware` 请求固件；请求体 `{ "force": true }` 会让云端重新编译。任务响应中的 `firmware_status`、`firmware_progress_percent`、`firmware_detail` 和 `firmware_error` 分别表示固件状态、进度、当前阶段和错误。
 
 ## 旧任务清理规则
 
@@ -105,6 +107,7 @@ queued -> running -> validated   （仅校验）
 |-- jobs/<job-id>/dataset_manifest.json
 |-- jobs/<job-id>/pipeline.log
 `-- artifacts/training-runs/<job-id>/
+    `-- firmware/{firmware-manifest.json,firmware-bundle.zip,*.bin}
 ```
 
 SQLite 使用 WAL 和 30 秒 busy timeout。API 负责写入上传与任务记录，单 worker 原子领取队列中最早的任务；worker 重启后会把中断的 `running` 任务重新放回队列。

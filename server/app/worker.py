@@ -20,7 +20,9 @@ import pandas as pd
 
 from .config import Settings
 from .database import Database
+from .firmware import build_dongle_firmware
 from .maintenance import cleanup_old_jobs
+from .oss_backup import backup_approved_model
 from .storage import EVENT_COLUMNS, SAMPLE_COLUMNS, dataset_file, sha256_file
 
 
@@ -205,6 +207,11 @@ def build_dataset_manifest(
 
 
 def run_one(settings: Settings, database: Database) -> bool:
+    firmware_job = database.claim_next_firmware_job()
+    if firmware_job is not None:
+        run_firmware_job(settings, database, firmware_job)
+        cleanup_old_jobs(settings, database)
+        return True
     job = database.claim_next_job()
     if job is None:
         return False
@@ -283,6 +290,8 @@ def run_one(settings: Settings, database: Database) -> bool:
             raise RuntimeError(error)
         final_status = "validated" if job["mode"] == "validate" else "passed"
         database.finish_job(job["id"], final_status, str(run_dir), None)
+        if final_status == "passed":
+            database.queue_firmware_build(job["id"])
     except Exception as exc:
         with log_path.open("a", encoding="utf-8", newline="\n") as log:
             log.write("\n[worker:error]\n")
@@ -293,6 +302,34 @@ def run_one(settings: Settings, database: Database) -> bool:
             shutil.copy2(log_path, run_dir / "worker.log")
         cleanup_old_jobs(settings, database)
     return True
+
+
+def run_firmware_job(settings: Settings, database: Database, job: dict[str, Any]) -> None:
+    run_dir = Path(str(job.get("run_dir") or ""))
+    if not run_dir.is_dir():
+        database.finish_firmware_build(job["id"], "training artifact directory is missing")
+        return
+
+    def update(_stage: str, detail: str, percent: float) -> None:
+        # 固件有独立进度，训练完成后的 UI 不再混入上一份模型内容。
+        mapped = max(2.0, min(99.0, (percent - 90.0) * 9.7 + 2.0))
+        database.update_firmware_progress(job["id"], detail, mapped)
+
+    try:
+        build_dongle_firmware(PROJECT_ROOT, run_dir, job["id"], update)
+        database.finish_firmware_build(job["id"])
+        refreshed = database.get_job(job["id"])
+        if refreshed is not None and refreshed.get("approved_at"):
+            # 如果玩家在固件编译期间批准模型，再备份一次，确保 OSS 包含最终 .bin。
+            database.update_oss_backup(job["id"], "pending")
+            backup_approved_model(settings, database.path, job["id"], str(run_dir))
+    except Exception as exc:
+        firmware_log = run_dir / "firmware" / "firmware-build.log"
+        if firmware_log.is_file():
+            with firmware_log.open("a", encoding="utf-8", newline="\n") as log:
+                log.write("\n[worker:error]\n")
+                log.write(traceback.format_exc())
+        database.finish_firmware_build(job["id"], str(exc))
 
 
 def main() -> int:

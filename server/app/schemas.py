@@ -35,3 +35,7 @@ class JobCreate(BaseModel):
 
 class ApprovalCreate(BaseModel):
     approved_by: str = Field(min_length=1, max_length=100)
+
+
+class FirmwareBuildCreate(BaseModel):
+    force: bool = False
