@@ -24,10 +24,13 @@ static const char *TAG = "usb_keyboard";
 #define USB_HID_SEND_TIMEOUT_MS 100
 #define USB_HID_SEND_RETRY_MS   2
 #define USB_TELEMETRY_MAX_LINE_SIZE 500
+#define USB_TELEMETRY_COMMAND_BUFFER_SIZE 96
 
 static bool s_usb_keyboard_installed = false;
 static bool s_usb_serial_jtag_mode = false;
 static volatile bool s_usb_telemetry_port_open = false;
+static char s_usb_telemetry_command_buffer[USB_TELEMETRY_COMMAND_BUFFER_SIZE];
+static size_t s_usb_telemetry_command_length = 0;
 static uint8_t s_mouse_buttons = 0;
 
 static const uint8_t s_hid_report_descriptor[] = {
@@ -143,6 +146,7 @@ esp_err_t usb_keyboard_init(void)
 
     s_usb_keyboard_installed = true;
     s_usb_telemetry_port_open = false;
+    s_usb_telemetry_command_length = 0;
     s_mouse_buttons = 0;
     ESP_LOGI(TAG, "USB HID keyboard+mouse and CDC telemetry initialized");
     return ESP_OK;
@@ -253,6 +257,40 @@ esp_err_t usb_telemetry_write_line(const char *line)
 
     const esp_err_t flush_err = tinyusb_cdcacm_write_flush(TINYUSB_CDC_ACM_0, 0);
     return (flush_err == ESP_OK || flush_err == ESP_ERR_NOT_FINISHED) ? ESP_OK : flush_err;
+}
+
+bool usb_telemetry_read_line(char *line, size_t line_size)
+{
+    if (line == NULL || line_size < 2 || !usb_telemetry_is_ready()) {
+        return false;
+    }
+
+    while (tud_cdc_n_available(TINYUSB_CDC_ACM_0) > 0) {
+        uint8_t value = 0;
+        if (tud_cdc_n_read(TINYUSB_CDC_ACM_0, &value, 1) != 1) {
+            break;
+        }
+        if (value == '\r') {
+            continue;
+        }
+        if (value == '\n') {
+            if (s_usb_telemetry_command_length == 0) {
+                continue;
+            }
+            const size_t copy_length = s_usb_telemetry_command_length < line_size - 1 ?
+                s_usb_telemetry_command_length : line_size - 1;
+            memcpy(line, s_usb_telemetry_command_buffer, copy_length);
+            line[copy_length] = '\0';
+            s_usb_telemetry_command_length = 0;
+            return true;
+        }
+        if (s_usb_telemetry_command_length + 1 < sizeof(s_usb_telemetry_command_buffer)) {
+            s_usb_telemetry_command_buffer[s_usb_telemetry_command_length++] = (char)value;
+        } else {
+            s_usb_telemetry_command_length = 0;
+        }
+    }
+    return false;
 }
 
 static esp_err_t usb_hid_send_keyboard_report(uint8_t modifier, const uint8_t keycodes[6])

@@ -1,4 +1,6 @@
 using System.ComponentModel;
+using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -26,6 +28,14 @@ public partial class MainWindow : Window
     }
 
     private sealed record DisplayResolutionOption(string Key, int Width, int Height, string DisplayName)
+    {
+        public override string ToString() => DisplayName;
+    }
+
+    private sealed record AdventureGoalOption(AdventureGoalType Type,
+                                              string DisplayName,
+                                              string Unit,
+                                              double DefaultTarget)
     {
         public override string ToString() => DisplayName;
     }
@@ -60,6 +70,13 @@ public partial class MainWindow : Window
         new("5120x1440", 5120, 1440, "5120 × 1440 · 双 QHD"),
     ];
 
+    private static readonly AdventureGoalOption[] AdventureGoalOptions =
+    [
+        new(AdventureGoalType.ActiveMinutes, "有效运动时间", "分钟", 30),
+        new(AdventureGoalType.Calories, "估算消耗", "kcal", 100),
+        new(AdventureGoalType.Actions, "完成动作次数", "次", 100),
+    ];
+
     private const int HotkeyId = 0x4D3250;
     private const uint ModControl = 0x0002;
     private const uint ModShift = 0x0004;
@@ -70,6 +87,8 @@ public partial class MainWindow : Window
     private readonly ProfileService _profileService = new();
     private readonly GameWindowService _gameWindowService = new();
     private readonly OverlayPlacementService _overlayPlacementService = new();
+    private readonly AdventureGoalService _adventureGoalService = new();
+    private readonly WorkoutReportService _workoutReportService = new();
     private readonly ITelemetrySource _telemetrySource;
     private readonly DispatcherTimer _placementSaveTimer = new()
     {
@@ -101,6 +120,25 @@ public partial class MainWindow : Window
     private string _currentResolutionKey = "auto";
     private int _previewResolutionWidth = 1920;
     private int _previewResolutionHeight = 1080;
+    private AdventureGoalSettings _adventureGoal = new(AdventureGoalType.Calories, 100);
+    private bool _loadingGoalControls;
+    private bool _sessionInitialized;
+    private DateTimeOffset _workoutSessionStartedAt;
+    private double _sessionBaseCalories;
+    private TimeSpan _sessionBaseActiveTime;
+    private uint _sessionBaseEventCount;
+    private uint _lastObservedEventCount;
+    private int _sessionMaxCombo;
+    private int _sessionMaxIntensity;
+    private long _sessionIntensityTotal;
+    private int _sessionIntensitySamples;
+    private readonly Dictionary<string, uint> _sessionActionCounts = new(StringComparer.OrdinalIgnoreCase);
+    private bool _endingWorkout;
+    private bool _measurementAcknowledged;
+    private DateTimeOffset _measurementCommandSentAt;
+    private TelemetrySnapshot? _pendingReportSnapshot;
+    private DateTimeOffset _pendingReportEndedAt;
+    private string? _lastReportPath;
 
     public MainWindow()
     {
@@ -123,6 +161,8 @@ public partial class MainWindow : Window
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        GoalTypeSelector.ItemsSource = AdventureGoalOptions;
+        LoadAdventureGoalControls();
         OverlayAnchorSelector.ItemsSource = OverlayAnchorOptions;
         OverlayResolutionSelector.ItemsSource = DisplayResolutionOptions;
         _profiles = _profileService.LoadProfiles();
@@ -136,12 +176,27 @@ public partial class MainWindow : Window
                                        ?? _profiles[0];
         RefreshWindowTargets();
         _telemetryStartedAt = DateTimeOffset.UtcNow;
+        _workoutSessionStartedAt = DateTimeOffset.Now;
         _telemetrySource.Start();
         _deviceWatchTimer.Start();
     }
 
     private async void OnContentRendered(object? sender, EventArgs e)
     {
+        var reportCaptureArgument = Environment.GetCommandLineArgs()
+            .FirstOrDefault(argument => argument.StartsWith("--capture-report=", StringComparison.OrdinalIgnoreCase));
+        if (reportCaptureArgument is not null)
+        {
+            EndWorkoutButton_Click(this, new RoutedEventArgs());
+            await Task.Delay(11500);
+            var reportOutputPath = Path.GetFullPath(
+                reportCaptureArgument["--capture-report=".Length..].Trim('"'));
+            CaptureElementToPng(MainShell, reportOutputPath);
+            _exitRequested = true;
+            Close();
+            return;
+        }
+
         var trainingCaptureArgument = Environment.GetCommandLineArgs()
             .FirstOrDefault(argument => argument.StartsWith("--capture-training=", StringComparison.OrdinalIgnoreCase));
         if (trainingCaptureArgument is not null)
@@ -364,6 +419,8 @@ public partial class MainWindow : Window
         _viewModel.ApplySnapshot(snapshot);
         _latestTelemetrySnapshot = snapshot;
         _latestTelemetrySnapshotAt = DateTimeOffset.UtcNow;
+        UpdateWorkoutSession(snapshot);
+        UpdateHeartRateMeasurementUi(snapshot);
         if (ProfileSelector.SelectedItem is GameProfile profile)
         {
             if (snapshot.Celebrate && profile.Encouragements.Length > 0)
@@ -378,6 +435,312 @@ public partial class MainWindow : Window
             _overlayWindow?.ShowEncouragement();
             AnimatePreviewToast();
         }
+    }
+
+    private void LoadAdventureGoalControls()
+    {
+        _loadingGoalControls = true;
+        _adventureGoal = _adventureGoalService.Load();
+        GoalTypeSelector.SelectedItem = AdventureGoalOptions.First(option =>
+            option.Type == _adventureGoal.Type);
+        GoalTargetTextBox.Text = _adventureGoal.Target.ToString("0.#", CultureInfo.CurrentCulture);
+        GoalUnitText.Text = SelectedGoalOption().Unit;
+        _loadingGoalControls = false;
+        RefreshAdventureGoalDisplay(_latestTelemetrySnapshot);
+    }
+
+    private AdventureGoalOption SelectedGoalOption() =>
+        GoalTypeSelector.SelectedItem as AdventureGoalOption ?? AdventureGoalOptions[1];
+
+    private void GoalTypeSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingGoalControls || GoalTargetTextBox is null)
+        {
+            return;
+        }
+        var option = SelectedGoalOption();
+        GoalTargetTextBox.Text = option.DefaultTarget.ToString("0.#", CultureInfo.CurrentCulture);
+        GoalUnitText.Text = option.Unit;
+    }
+
+    private void ApplyAdventureGoal_Click(object sender, RoutedEventArgs e)
+    {
+        var targetText = GoalTargetTextBox.Text.Trim();
+        if (!double.TryParse(targetText, NumberStyles.Float, CultureInfo.CurrentCulture, out var target) &&
+            !double.TryParse(targetText, NumberStyles.Float, CultureInfo.InvariantCulture, out target))
+        {
+            GoalSettingsStatusText.Text = "请输入有效目标数字";
+            return;
+        }
+
+        _adventureGoalService.Save(new AdventureGoalSettings(SelectedGoalOption().Type, target));
+        _adventureGoal = _adventureGoalService.Load();
+        GoalTargetTextBox.Text = _adventureGoal.Target.ToString("0.#", CultureInfo.CurrentCulture);
+        GoalUnitText.Text = SelectedGoalOption().Unit;
+        GoalSettingsStatusText.Text = "目标已保存，本次运动立即生效";
+        RefreshAdventureGoalDisplay(_latestTelemetrySnapshot);
+    }
+
+    private void UpdateWorkoutSession(TelemetrySnapshot snapshot)
+    {
+        if (!_sessionInitialized)
+        {
+            InitializeWorkoutSession(snapshot);
+        }
+
+        if (!_endingWorkout)
+        {
+            _sessionMaxCombo = Math.Max(_sessionMaxCombo, snapshot.Combo);
+            if (snapshot.Active)
+            {
+                _sessionIntensityTotal += snapshot.IntensityPercent;
+                _sessionIntensitySamples++;
+                _sessionMaxIntensity = Math.Max(_sessionMaxIntensity, snapshot.IntensityPercent);
+            }
+
+            if (snapshot.EventCount >= _lastObservedEventCount)
+            {
+                var added = snapshot.EventCount - _lastObservedEventCount;
+                if (added > 0 && !string.IsNullOrWhiteSpace(snapshot.EventAction))
+                {
+                    _sessionActionCounts[snapshot.EventAction] =
+                        _sessionActionCounts.GetValueOrDefault(snapshot.EventAction) + added;
+                }
+            }
+            _lastObservedEventCount = snapshot.EventCount;
+        }
+
+        RefreshAdventureGoalDisplay(_endingWorkout ? _pendingReportSnapshot : snapshot);
+    }
+
+    private void InitializeWorkoutSession(TelemetrySnapshot snapshot)
+    {
+        _sessionInitialized = true;
+        _workoutSessionStartedAt = DateTimeOffset.Now;
+        _sessionBaseCalories = snapshot.Calories;
+        _sessionBaseActiveTime = snapshot.ActiveTime;
+        _sessionBaseEventCount = snapshot.EventCount;
+        _lastObservedEventCount = snapshot.EventCount;
+        _sessionMaxCombo = snapshot.Combo;
+        _sessionMaxIntensity = 0;
+        _sessionIntensityTotal = 0;
+        _sessionIntensitySamples = 0;
+        _sessionActionCounts.Clear();
+    }
+
+    private double SessionCalories(TelemetrySnapshot snapshot) =>
+        Math.Max(0, snapshot.Calories - _sessionBaseCalories);
+
+    private TimeSpan SessionActiveTime(TelemetrySnapshot snapshot) =>
+        snapshot.ActiveTime > _sessionBaseActiveTime
+            ? snapshot.ActiveTime - _sessionBaseActiveTime
+            : TimeSpan.Zero;
+
+    private uint SessionActionCount(TelemetrySnapshot snapshot) =>
+        snapshot.EventCount >= _sessionBaseEventCount
+            ? snapshot.EventCount - _sessionBaseEventCount
+            : 0;
+
+    private double CurrentGoalValue(TelemetrySnapshot snapshot) => _adventureGoal.Type switch
+    {
+        AdventureGoalType.ActiveMinutes => SessionActiveTime(snapshot).TotalMinutes,
+        AdventureGoalType.Actions => SessionActionCount(snapshot),
+        _ => SessionCalories(snapshot),
+    };
+
+    private int CurrentGoalProgress(TelemetrySnapshot snapshot) =>
+        _adventureGoal.Target <= 0
+            ? 0
+            : Math.Clamp((int)Math.Round(CurrentGoalValue(snapshot) / _adventureGoal.Target * 100.0), 0, 100);
+
+    private void RefreshAdventureGoalDisplay(TelemetrySnapshot? snapshot)
+    {
+        var option = AdventureGoalOptions.First(item => item.Type == _adventureGoal.Type);
+        var progress = snapshot is null ? 0 : CurrentGoalProgress(snapshot);
+        var label = $"本次冒险目标 · {_adventureGoal.Target:0.#} {option.Unit}";
+        _viewModel.SetAdventureGoal(label, progress);
+        if (GoalProgressSummaryText is not null)
+        {
+            var current = snapshot is null ? 0 : CurrentGoalValue(snapshot);
+            GoalProgressSummaryText.Text = $"当前 {current:0.#} / {_adventureGoal.Target:0.#} {option.Unit} · {progress}%";
+        }
+    }
+
+    private void EndWorkoutButton_Click(object sender, RoutedEventArgs e)
+    {
+        var snapshot = GetFreshTelemetrySnapshot();
+        if (snapshot is null)
+        {
+            GoalSettingsStatusText.Text = "尚未收到Dongle数据，请先连接设备";
+            return;
+        }
+        if (!snapshot.BladeOnline)
+        {
+            GoalSettingsStatusText.Text = "Blade未在线，无法开始运动后心率测量";
+            return;
+        }
+
+        _pendingReportSnapshot = snapshot;
+        _pendingReportEndedAt = DateTimeOffset.Now;
+        _endingWorkout = true;
+        _measurementAcknowledged = false;
+        _measurementCommandSentAt = DateTimeOffset.UtcNow;
+        if (!_telemetrySource.StartHeartRateMeasurement(10))
+        {
+            _endingWorkout = false;
+            _pendingReportSnapshot = null;
+            GoalSettingsStatusText.Text = "心率测量命令发送失败，请刷新设备后重试";
+            return;
+        }
+
+        AdventureSetupPanel.Visibility = Visibility.Collapsed;
+        WorkoutReportPanel.Visibility = Visibility.Collapsed;
+        HeartRateMeasurePanel.Visibility = Visibility.Visible;
+        HeartRateCountdownText.Text = "10";
+        HeartRateMeasureTitle.Text = "正在通知小剑开启心率传感器";
+        HeartRateMeasureHint.Text = "请把手指放到小剑背面的MAX30102上，并保持身体静止";
+        EndWorkoutButton.IsEnabled = false;
+    }
+
+    private void UpdateHeartRateMeasurementUi(TelemetrySnapshot snapshot)
+    {
+        if (!_endingWorkout)
+        {
+            return;
+        }
+
+        switch (snapshot.HeartRateState)
+        {
+            case HeartRateMeasurementState.WaitingForFinger:
+                _measurementAcknowledged = true;
+                HeartRateMeasureTitle.Text = "请将手指贴住小剑背面";
+                HeartRateMeasureHint.Text = "检测到手指后自动开始10秒测量，请保持静止";
+                HeartRateCountdownText.Text = "10";
+                break;
+            case HeartRateMeasurementState.Measuring:
+                _measurementAcknowledged = true;
+                HeartRateMeasureTitle.Text = "正在测量运动后心率";
+                HeartRateMeasureHint.Text = "请勿移动，也不要移开手指";
+                HeartRateCountdownText.Text = snapshot.HeartRateRemainingSeconds.ToString(CultureInfo.InvariantCulture);
+                break;
+            case HeartRateMeasurementState.Complete when _measurementAcknowledged && snapshot.HeartRate is not null:
+                GenerateWorkoutReport(snapshot.HeartRate.Value);
+                break;
+            case HeartRateMeasurementState.Failed when _measurementAcknowledged:
+                HeartRateMeasureTitle.Text = "本次心率测量未成功";
+                HeartRateMeasureHint.Text = "请擦拭传感器并稳定按住，然后点击重新测量";
+                HeartRateCountdownText.Text = "!";
+                EndWorkoutButton.Content = "重新测量";
+                EndWorkoutButton.IsEnabled = true;
+                AdventureSetupPanel.Visibility = Visibility.Visible;
+                HeartRateMeasurePanel.Visibility = Visibility.Collapsed;
+                break;
+        }
+    }
+
+    private void GenerateWorkoutReport(int postWorkoutHeartRate)
+    {
+        if (_pendingReportSnapshot is not { } snapshot)
+        {
+            return;
+        }
+
+        var report = new WorkoutReport
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            StartedAt = _workoutSessionStartedAt,
+            EndedAt = _pendingReportEndedAt,
+            GameProfile = (ProfileSelector.SelectedItem as GameProfile)?.DisplayName ?? "MoveToPlay",
+            GoalType = _adventureGoal.Type,
+            GoalTarget = _adventureGoal.Target,
+            GoalProgressPercent = CurrentGoalProgress(snapshot),
+            TotalDurationSeconds = Math.Max(0, (_pendingReportEndedAt - _workoutSessionStartedAt).TotalSeconds),
+            ActiveDurationSeconds = SessionActiveTime(snapshot).TotalSeconds,
+            EstimatedCalories = Math.Round(SessionCalories(snapshot), 1),
+            PostWorkoutHeartRate = postWorkoutHeartRate,
+            ActionCount = SessionActionCount(snapshot),
+            MaxCombo = _sessionMaxCombo,
+            AverageIntensityPercent = _sessionIntensitySamples > 0
+                ? (int)Math.Round((double)_sessionIntensityTotal / _sessionIntensitySamples)
+                : 0,
+            MaxIntensityPercent = _sessionMaxIntensity,
+            ActionBreakdown = new Dictionary<string, uint>(_sessionActionCounts,
+                                                           StringComparer.OrdinalIgnoreCase),
+        };
+
+        try
+        {
+            _lastReportPath = _workoutReportService.Save(report);
+            ReportSaveStatusText.Text = $"已保存：{Path.GetFileName(_lastReportPath)}";
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _lastReportPath = null;
+            ReportSaveStatusText.Text = "报告展示成功，但本地文件保存失败";
+        }
+
+        ReportDurationText.Text = FormatReportDuration(TimeSpan.FromSeconds(report.TotalDurationSeconds));
+        ReportActiveTimeText.Text = FormatReportDuration(TimeSpan.FromSeconds(report.ActiveDurationSeconds));
+        ReportCaloriesText.Text = $"{report.EstimatedCalories:0.0} kcal";
+        ReportHeartRateText.Text = $"{postWorkoutHeartRate} BPM";
+        ReportActionCountText.Text = $"{report.ActionCount} 次";
+        ReportComboText.Text = $"{report.MaxCombo} 次";
+        ReportIntensityText.Text = $"{report.AverageIntensityPercent}% / {report.MaxIntensityPercent}%";
+        ReportGoalText.Text = $"{report.GoalProgressPercent}%";
+        ReportTopActionText.Text = report.ActionBreakdown.Count == 0
+            ? "本次暂无单次动作事件记录"
+            : "主要动作：" + string.Join(" · ", report.ActionBreakdown
+                .OrderByDescending(item => item.Value)
+                .Take(3)
+                .Select(item => $"{item.Key} {item.Value}次"));
+
+        HeartRateMeasurePanel.Visibility = Visibility.Collapsed;
+        AdventureSetupPanel.Visibility = Visibility.Collapsed;
+        WorkoutReportPanel.Visibility = Visibility.Visible;
+        _endingWorkout = false;
+        EndWorkoutButton.Content = "结束运动并测量心率";
+        EndWorkoutButton.IsEnabled = true;
+    }
+
+    private static string FormatReportDuration(TimeSpan duration) =>
+        duration.TotalHours >= 1 ? duration.ToString(@"hh\:mm\:ss") : duration.ToString(@"mm\:ss");
+
+    private void StartNewWorkoutButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_latestTelemetrySnapshot is { } snapshot)
+        {
+            _sessionInitialized = false;
+            InitializeWorkoutSession(snapshot);
+        }
+        else
+        {
+            _sessionInitialized = false;
+            _workoutSessionStartedAt = DateTimeOffset.Now;
+        }
+        _endingWorkout = false;
+        _pendingReportSnapshot = null;
+        _measurementAcknowledged = false;
+        _ = _telemetrySource.StopHeartRateMeasurement();
+        WorkoutReportPanel.Visibility = Visibility.Collapsed;
+        HeartRateMeasurePanel.Visibility = Visibility.Collapsed;
+        AdventureSetupPanel.Visibility = Visibility.Visible;
+        GoalSettingsStatusText.Text = "新一轮运动已经开始";
+        RefreshAdventureGoalDisplay(_latestTelemetrySnapshot);
+    }
+
+    private void OpenReportFolderButton_Click(object sender, RoutedEventArgs e)
+    {
+        var directory = _lastReportPath is null
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                           "MoveToPlay",
+                           "reports")
+            : Path.GetDirectoryName(_lastReportPath);
+        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+        {
+            ReportSaveStatusText.Text = "尚未生成可打开的报告文件";
+            return;
+        }
+        Process.Start(new ProcessStartInfo(directory) { UseShellExecute = true });
     }
 
     private void OnTelemetryStatusChanged(object? sender, TelemetrySourceStatus status)
@@ -434,6 +797,7 @@ public partial class MainWindow : Window
         _overlayWindow?.ApplyPlacement(placement);
         _overlayControlWindow?.LoadPlacement(placement, _currentResolutionKey, profile.DisplayName);
         ApplyPreviewPosition(placement);
+        RefreshAdventureGoalDisplay(_latestTelemetrySnapshot);
 
         var matchingTarget = _gameWindowService.FindProfileWindow(_windowTargets, profile);
         WindowSelector.SelectedItem = matchingTarget
@@ -829,6 +1193,16 @@ public partial class MainWindow : Window
 
     private async void DeviceWatchTimer_Tick(object? sender, EventArgs e)
     {
+        if (_endingWorkout && !_measurementAcknowledged &&
+            DateTimeOffset.UtcNow - _measurementCommandSentAt > TimeSpan.FromSeconds(5))
+        {
+            _endingWorkout = false;
+            HeartRateMeasurePanel.Visibility = Visibility.Collapsed;
+            AdventureSetupPanel.Visibility = Visibility.Visible;
+            EndWorkoutButton.Content = "重新发送测量命令";
+            EndWorkoutButton.IsEnabled = true;
+            GoalSettingsStatusText.Text = "Blade未确认测量命令，请检查其在线状态后重试";
+        }
         if (_telemetryRefreshRunning || _telemetrySuspendedForCollection)
         {
             return;

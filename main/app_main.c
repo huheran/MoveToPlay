@@ -177,6 +177,8 @@ static const char *TAG = "imu_main";
 #define BLADE_HEART_RATE_POLL_MS      20
 #define BLADE_HEART_RATE_SERIAL_MS    1000
 #define BLADE_HEART_RATE_FINGER_MIN_IR 10000U
+#define BLADE_HEART_RATE_DEFAULT_MEASUREMENT_SECONDS 10U
+#define BLADE_HEART_RATE_FINGER_TIMEOUT_SECONDS 20U
 
 #define BATTERY_REPORT_INTERVAL_MS    5000
 
@@ -233,6 +235,16 @@ static bool sampling_enabled = true;
 static volatile bool s_local_battery_valid = false;
 static volatile uint8_t s_local_battery_percent = M2P_ESPNOW_BATTERY_PERCENT_UNKNOWN;
 static volatile uint16_t s_local_battery_mv = 0;
+static portMUX_TYPE s_blade_heart_rate_mux = portMUX_INITIALIZER_UNLOCKED;
+static uint16_t s_blade_heart_rate_bpm_x10 = 0;
+static bool s_blade_heart_rate_valid = false;
+static bool s_blade_finger_present = false;
+static m2p_heart_rate_state_t s_blade_heart_rate_measurement_state = M2P_HEART_RATE_STATE_OFF;
+static uint8_t s_blade_heart_rate_remaining_seconds = 0;
+static uint32_t s_blade_heart_rate_command_generation = 0;
+static bool s_blade_heart_rate_command_start = false;
+static uint8_t s_blade_heart_rate_command_duration_seconds =
+    BLADE_HEART_RATE_DEFAULT_MEASUREMENT_SECONDS;
 
 static uint16_t battery_voltage_to_mv(float voltage)
 {
@@ -400,6 +412,10 @@ typedef struct {
     bool pressed;
     bool dirty;
     bool battery_valid;
+    bool heart_rate_valid;
+    bool finger_present;
+    m2p_heart_rate_state_t heart_rate_state;
+    uint8_t heart_rate_remaining_seconds;
     uint8_t src_addr[6];
     uint8_t node_id;
     uint32_t sequence;
@@ -408,6 +424,7 @@ typedef struct {
     int64_t last_battery_rx_us;
     uint16_t battery_mv;
     uint8_t battery_percent;
+    uint16_t heart_rate_bpm_x10;
 } dongle_blade_state_t;
 
 typedef enum {
@@ -548,6 +565,29 @@ static void dongle_store_blade_packet(const m2p_espnow_rx_packet_t *rx_packet)
     s_dongle_blade_state.sequence = rx_packet->packet.sequence;
     s_dongle_blade_state.timestamp_us = rx_packet->packet.timestamp_us;
     s_dongle_blade_state.last_rx_us = esp_timer_get_time();
+    if (rx_packet->packet.version >= 3) {
+        const bool heart_rate_valid =
+            (rx_packet->packet.flags & M2P_ESPNOW_BLADE_FLAG_HEART_RATE_VALID) != 0 &&
+            rx_packet->packet.heart_rate_bpm_x10 >= 400U &&
+            rx_packet->packet.heart_rate_bpm_x10 <= 2000U;
+        s_dongle_blade_state.heart_rate_valid = heart_rate_valid;
+        s_dongle_blade_state.finger_present =
+            (rx_packet->packet.flags & M2P_ESPNOW_BLADE_FLAG_FINGER_PRESENT) != 0;
+        s_dongle_blade_state.heart_rate_bpm_x10 =
+            heart_rate_valid ? rx_packet->packet.heart_rate_bpm_x10 : 0;
+        s_dongle_blade_state.heart_rate_state =
+            (rx_packet->packet.heart_rate_state <= M2P_HEART_RATE_STATE_FAILED) ?
+                (m2p_heart_rate_state_t)rx_packet->packet.heart_rate_state :
+                M2P_HEART_RATE_STATE_FAILED;
+        s_dongle_blade_state.heart_rate_remaining_seconds =
+            rx_packet->packet.heart_rate_remaining_seconds;
+    } else {
+        s_dongle_blade_state.heart_rate_valid = false;
+        s_dongle_blade_state.finger_present = false;
+        s_dongle_blade_state.heart_rate_bpm_x10 = 0;
+        s_dongle_blade_state.heart_rate_state = M2P_HEART_RATE_STATE_OFF;
+        s_dongle_blade_state.heart_rate_remaining_seconds = 0;
+    }
     if ((rx_packet->packet.flags & M2P_ESPNOW_BLADE_FLAG_BATTERY_VALID) != 0 &&
         rx_packet->packet.battery_percent <= 100U) {
         s_dongle_blade_state.battery_valid = true;
@@ -1509,6 +1549,7 @@ static dongle_telemetry_state_t s_dongle_telemetry_state = {
 };
 static uint32_t s_dongle_telemetry_packet_sequence;
 static int64_t s_dongle_last_telemetry_send_us;
+static uint32_t s_dongle_blade_control_sequence;
 static float s_dongle_smoothed_motion_intensity;
 static float dongle_effective_min_confidence(uint8_t class_idx);
 
@@ -2603,12 +2644,17 @@ typedef struct {
     bool online;
     bool pressed;
     bool battery_valid;
+    bool heart_rate_valid;
+    bool finger_present;
+    m2p_heart_rate_state_t heart_rate_state;
+    uint8_t heart_rate_remaining_seconds;
     uint8_t node_id;
     uint32_t sequence;
     uint32_t age_ms;
     uint32_t battery_age_ms;
     uint16_t battery_mv;
     uint8_t battery_percent;
+    uint16_t heart_rate_bpm_x10;
 } dongle_status_blade_snapshot_t;
 
 static httpd_handle_t s_dongle_status_httpd;
@@ -2661,12 +2707,18 @@ static void dongle_status_snapshot(dongle_status_node_snapshot_t snapshot[DONGLE
         blade->online = s_dongle_blade_state.valid && age_ms <= DONGLE_STATUS_ONLINE_MAX_AGE_MS;
         blade->pressed = s_dongle_blade_state.valid && s_dongle_blade_state.pressed;
         blade->battery_valid = s_dongle_blade_state.battery_valid;
+        blade->heart_rate_valid = s_dongle_blade_state.heart_rate_valid;
+        blade->finger_present = s_dongle_blade_state.finger_present;
+        blade->heart_rate_state = s_dongle_blade_state.heart_rate_state;
+        blade->heart_rate_remaining_seconds =
+            s_dongle_blade_state.heart_rate_remaining_seconds;
         blade->node_id = s_dongle_blade_state.valid ? s_dongle_blade_state.node_id : BLADE_NODE_ID;
         blade->sequence = s_dongle_blade_state.valid ? s_dongle_blade_state.sequence : 0;
         blade->age_ms = age_ms;
         blade->battery_age_ms = battery_age_ms;
         blade->battery_mv = s_dongle_blade_state.battery_mv;
         blade->battery_percent = s_dongle_blade_state.battery_percent;
+        blade->heart_rate_bpm_x10 = s_dongle_blade_state.heart_rate_bpm_x10;
     }
     dongle_state_unlock();
 }
@@ -2715,7 +2767,9 @@ static void dongle_telemetry_maybe_send(int64_t now_us, const char *runtime_mode
     const uint8_t quality_percent =
         (uint8_t)((tracker_online * 100U) / RF_INFER_NODE_COUNT);
     const int blade_battery = blade.battery_valid ? (int)blade.battery_percent : -1;
-    char line[500];
+    const unsigned heart_rate_bpm = (blade.online && blade.heart_rate_valid) ?
+        (unsigned)((blade.heart_rate_bpm_x10 + 5U) / 10U) : 0U;
+    char line[560];
     const int written = snprintf(
         line,
         sizeof(line),
@@ -2724,7 +2778,9 @@ static void dongle_telemetry_maybe_send(int64_t now_us, const char *runtime_mode
         ",\"action\":\"%s\",\"confidence\":%u,\"intensity\":%u,\"active\":%s"
         ",\"event_count\":%" PRIu32 ",\"event_action\":\"%s\",\"event\":\"%s\""
         ",\"tracker_mask\":%u,\"tracker_online\":%u,\"quality\":%u"
-        ",\"blade_online\":%s,\"battery\":[%d,%d,%d,%d,%d]}\n",
+        ",\"blade_online\":%s,\"heart_rate_bpm\":%u,\"heart_rate_valid\":%s"
+        ",\"finger_present\":%s,\"heart_rate_state\":%u,\"heart_rate_remaining\":%u"
+        ",\"battery\":[%d,%d,%d,%d,%d]}\n",
         s_dongle_telemetry_packet_sequence++,
         (uint64_t)(now_us / 1000LL),
         (runtime_mode != NULL) ? runtime_mode : "play",
@@ -2740,6 +2796,11 @@ static void dongle_telemetry_maybe_send(int64_t now_us, const char *runtime_mode
         tracker_online,
         quality_percent,
         blade.online ? "true" : "false",
+        heart_rate_bpm,
+        (blade.online && blade.heart_rate_valid) ? "true" : "false",
+        (blade.online && blade.finger_present) ? "true" : "false",
+        blade.online ? (unsigned)blade.heart_rate_state : (unsigned)M2P_HEART_RATE_STATE_OFF,
+        blade.online ? (unsigned)blade.heart_rate_remaining_seconds : 0U,
         dongle_telemetry_battery_value(&nodes[0]),
         dongle_telemetry_battery_value(&nodes[1]),
         dongle_telemetry_battery_value(&nodes[2]),
@@ -2751,6 +2812,48 @@ static void dongle_telemetry_maybe_send(int64_t now_us, const char *runtime_mode
         return;
     }
     (void)usb_telemetry_write_line(line);
+}
+
+static void dongle_process_usb_commands(void)
+{
+    char command[96];
+    while (usb_telemetry_read_line(command, sizeof(command))) {
+        unsigned duration_seconds = 0;
+        bool recognized = false;
+        bool start = false;
+        if (sscanf(command, "M2P:HR_START:%u", &duration_seconds) == 1 &&
+            duration_seconds >= 5U && duration_seconds <= 30U) {
+            recognized = true;
+            start = true;
+        } else if (strcmp(command, "M2P:HR_STOP") == 0) {
+            recognized = true;
+            duration_seconds = 0;
+        }
+        if (!recognized) {
+            ESP_LOGW(TAG, "Unknown USB command: %s", command);
+            continue;
+        }
+
+        const uint32_t sequence = s_dongle_blade_control_sequence++;
+        for (uint8_t attempt = 0; attempt < 3U; attempt++) {
+            esp_err_t err = m2p_espnow_send_blade_heart_rate_control(
+                sequence,
+                start,
+                (uint8_t)duration_seconds);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "Blade heart-rate control send failed: %s", esp_err_to_name(err));
+                break;
+            }
+            if (attempt + 1U < 3U) {
+                vTaskDelay(pdMS_TO_TICKS(8));
+            }
+        }
+        ESP_LOGI(TAG,
+                 "USB heart-rate command forwarded: start=%d duration=%u seq=%" PRIu32,
+                 start ? 1 : 0,
+                 duration_seconds,
+                 sequence);
+    }
 }
 #endif
 
@@ -3631,6 +3734,11 @@ static void espnow_rx_task(void *arg)
     ESP_LOGI(TAG, "dongle waiting for ESP-NOW tracker/blade packets");
 
     while (1) {
+#if DONGLE_ENABLE_USB_TELEMETRY
+        if (!s_dongle_wifi_display_active) {
+            dongle_process_usb_commands();
+        }
+#endif
         m2p_espnow_rx_packet_t rx_packet = {0};
 
 #if DONGLE_ENABLE_SERIAL_OUTPUT
@@ -3863,6 +3971,61 @@ static void blade_heart_rate_reset(blade_heart_rate_state_t *state)
     state->peak_armed = true;
 }
 
+static void blade_heart_rate_publish(m2p_heart_rate_state_t measurement_state,
+                                     uint8_t remaining_seconds,
+                                     const blade_heart_rate_state_t *state)
+{
+    const bool valid = measurement_state == M2P_HEART_RATE_STATE_COMPLETE &&
+                       state->finger_present && state->beat_count >= 3U &&
+                       state->bpm >= 40.0f && state->bpm <= 200.0f;
+    const uint16_t bpm_x10 = valid ? (uint16_t)(state->bpm * 10.0f + 0.5f) : 0U;
+
+    portENTER_CRITICAL(&s_blade_heart_rate_mux);
+    s_blade_finger_present = state->finger_present;
+    s_blade_heart_rate_valid = valid;
+    s_blade_heart_rate_bpm_x10 = bpm_x10;
+    s_blade_heart_rate_measurement_state = measurement_state;
+    s_blade_heart_rate_remaining_seconds = remaining_seconds;
+    portEXIT_CRITICAL(&s_blade_heart_rate_mux);
+}
+
+static void blade_heart_rate_snapshot(bool *valid,
+                                      uint16_t *bpm_x10,
+                                      bool *finger_present,
+                                      m2p_heart_rate_state_t *measurement_state,
+                                      uint8_t *remaining_seconds)
+{
+    portENTER_CRITICAL(&s_blade_heart_rate_mux);
+    *valid = s_blade_heart_rate_valid;
+    *bpm_x10 = s_blade_heart_rate_bpm_x10;
+    *finger_present = s_blade_finger_present;
+    *measurement_state = s_blade_heart_rate_measurement_state;
+    *remaining_seconds = s_blade_heart_rate_remaining_seconds;
+    portEXIT_CRITICAL(&s_blade_heart_rate_mux);
+}
+
+static void blade_heart_rate_request(bool start, uint8_t duration_seconds)
+{
+    portENTER_CRITICAL(&s_blade_heart_rate_mux);
+    s_blade_heart_rate_command_start = start;
+    if (start) {
+        s_blade_heart_rate_command_duration_seconds = duration_seconds;
+    }
+    s_blade_heart_rate_command_generation++;
+    portEXIT_CRITICAL(&s_blade_heart_rate_mux);
+}
+
+static void blade_heart_rate_command_snapshot(uint32_t *generation,
+                                              bool *start,
+                                              uint8_t *duration_seconds)
+{
+    portENTER_CRITICAL(&s_blade_heart_rate_mux);
+    *generation = s_blade_heart_rate_command_generation;
+    *start = s_blade_heart_rate_command_start;
+    *duration_seconds = s_blade_heart_rate_command_duration_seconds;
+    portEXIT_CRITICAL(&s_blade_heart_rate_mux);
+}
+
 static void blade_heart_rate_process_sample(blade_heart_rate_state_t *state,
                                             const max30102_sample_t *sample,
                                             int64_t now_us)
@@ -3930,14 +4093,60 @@ static void blade_heart_rate_task(void *arg)
     max30102_sample_t last_sample = {0};
     int64_t last_serial_us = 0;
     int64_t last_error_us = 0;
+    int64_t finger_wait_started_us = 0;
+    int64_t measurement_started_us = 0;
+    int64_t measurement_request_started_us = 0;
+    uint32_t handled_command_generation = 0;
+    uint8_t duration_seconds = BLADE_HEART_RATE_DEFAULT_MEASUREMENT_SECONDS;
+    m2p_heart_rate_state_t measurement_state = M2P_HEART_RATE_STATE_OFF;
 
     printf("# heart-rate: sensor=MAX30102 address=0x57 SDA=%d SCL=%d INT=%d\n",
            BLADE_HEART_RATE_SDA_GPIO,
            BLADE_HEART_RATE_SCL_GPIO,
            BLADE_HEART_RATE_INT_GPIO);
-    printf("heart_rate_ms,bpm,finger_present,ir,red\n");
+    printf("heart_rate_ms,state,remaining_s,bpm,finger_present,ir,red\n");
+    blade_heart_rate_publish(measurement_state, 0, &state);
 
     while (1) {
+        uint32_t command_generation = 0;
+        bool command_start = false;
+        uint8_t command_duration_seconds = duration_seconds;
+        blade_heart_rate_command_snapshot(&command_generation,
+                                          &command_start,
+                                          &command_duration_seconds);
+        if (command_generation != handled_command_generation) {
+            handled_command_generation = command_generation;
+            blade_heart_rate_reset(&state);
+            last_sample = (max30102_sample_t){0};
+            measurement_started_us = 0;
+            if (!command_start) {
+                (void)max30102_stop();
+                measurement_state = M2P_HEART_RATE_STATE_OFF;
+                finger_wait_started_us = 0;
+            } else {
+                duration_seconds = command_duration_seconds;
+                esp_err_t start_err = max30102_start();
+                if (start_err == ESP_OK) {
+                    measurement_state = M2P_HEART_RATE_STATE_WAITING_FOR_FINGER;
+                    finger_wait_started_us = esp_timer_get_time();
+                    measurement_request_started_us = finger_wait_started_us;
+                } else {
+                    measurement_state = M2P_HEART_RATE_STATE_FAILED;
+                    ESP_LOGE(TAG, "MAX30102 measurement start failed: %s", esp_err_to_name(start_err));
+                }
+            }
+            blade_heart_rate_publish(measurement_state,
+                                     measurement_state == M2P_HEART_RATE_STATE_WAITING_FOR_FINGER ?
+                                         duration_seconds : 0,
+                                     &state);
+        }
+
+        if (measurement_state != M2P_HEART_RATE_STATE_WAITING_FOR_FINGER &&
+            measurement_state != M2P_HEART_RATE_STATE_MEASURING) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
         esp_err_t read_err = ESP_OK;
         while (read_err == ESP_OK) {
             max30102_sample_t sample = {0};
@@ -3949,9 +4158,67 @@ static void blade_heart_rate_task(void *arg)
         }
 
         const int64_t now_us = esp_timer_get_time();
+        if (measurement_request_started_us > 0 &&
+            now_us - measurement_request_started_us >= 30000000LL) {
+            measurement_state = M2P_HEART_RATE_STATE_FAILED;
+            (void)max30102_stop();
+        }
+        if ((measurement_state == M2P_HEART_RATE_STATE_WAITING_FOR_FINGER ||
+             measurement_state == M2P_HEART_RATE_STATE_MEASURING) &&
+            state.last_sample_us > 0 && now_us - state.last_sample_us > 500000) {
+            blade_heart_rate_reset(&state);
+            measurement_started_us = 0;
+            measurement_state = M2P_HEART_RATE_STATE_WAITING_FOR_FINGER;
+            finger_wait_started_us = now_us;
+        }
+
+        uint8_t remaining_seconds =
+            (measurement_state == M2P_HEART_RATE_STATE_WAITING_FOR_FINGER ||
+             measurement_state == M2P_HEART_RATE_STATE_MEASURING) ? duration_seconds : 0U;
+        if (measurement_state == M2P_HEART_RATE_STATE_WAITING_FOR_FINGER) {
+            if (state.finger_present) {
+                measurement_started_us = now_us;
+                measurement_state = M2P_HEART_RATE_STATE_MEASURING;
+                ESP_LOGI(TAG, "heart-rate: ten-second measurement started");
+            } else if (finger_wait_started_us > 0 &&
+                       now_us - finger_wait_started_us >=
+                           (int64_t)BLADE_HEART_RATE_FINGER_TIMEOUT_SECONDS * 1000000LL) {
+                measurement_state = M2P_HEART_RATE_STATE_FAILED;
+                (void)max30102_stop();
+            }
+        }
+        if (measurement_state == M2P_HEART_RATE_STATE_MEASURING) {
+            if (!state.finger_present) {
+                blade_heart_rate_reset(&state);
+                measurement_started_us = 0;
+                finger_wait_started_us = now_us;
+                measurement_state = M2P_HEART_RATE_STATE_WAITING_FOR_FINGER;
+            } else {
+                const int64_t elapsed_us = now_us - measurement_started_us;
+                if (elapsed_us >= (int64_t)duration_seconds * 1000000LL) {
+                    measurement_state = (state.bpm >= 40.0f && state.bpm <= 200.0f &&
+                                         state.beat_count >= 3U) ?
+                        M2P_HEART_RATE_STATE_COMPLETE : M2P_HEART_RATE_STATE_FAILED;
+                    remaining_seconds = 0;
+                    (void)max30102_stop();
+                    ESP_LOGI(TAG,
+                             "heart-rate: measurement finished state=%u bpm=%.1f beats=%" PRIu32,
+                             (unsigned)measurement_state,
+                             (double)state.bpm,
+                             state.beat_count);
+                } else {
+                    const int64_t remaining_us =
+                        (int64_t)duration_seconds * 1000000LL - elapsed_us;
+                    remaining_seconds = (uint8_t)((remaining_us + 999999LL) / 1000000LL);
+                }
+            }
+        }
+        blade_heart_rate_publish(measurement_state, remaining_seconds, &state);
         if (now_us - last_serial_us >= (int64_t)BLADE_HEART_RATE_SERIAL_MS * 1000LL) {
-            printf("%" PRId64 ",%.1f,%d,%" PRIu32 ",%" PRIu32 "\n",
+            printf("%" PRId64 ",%u,%u,%.1f,%d,%" PRIu32 ",%" PRIu32 "\n",
                    (int64_t)(now_us / 1000LL),
+                   (unsigned)measurement_state,
+                   (unsigned)remaining_seconds,
                    state.finger_present ? (double)state.bpm : 0.0,
                    state.finger_present ? 1 : 0,
                    last_sample.ir,
@@ -3959,7 +4226,8 @@ static void blade_heart_rate_task(void *arg)
             last_serial_us = now_us;
         }
 
-        if (read_err != ESP_ERR_NOT_FOUND && now_us - last_error_us >= 1000000) {
+        if (read_err != ESP_ERR_NOT_FOUND && read_err != ESP_ERR_INVALID_STATE &&
+            now_us - last_error_us >= 1000000) {
             ESP_LOGW(TAG, "MAX30102 FIFO read failed: %s", esp_err_to_name(read_err));
             last_error_us = now_us;
         }
@@ -4023,6 +4291,16 @@ static void blade_report_task(void *arg)
 
         if (periodic_report_due) {
             esp_err_t send_err = ESP_OK;
+            bool heart_rate_valid = false;
+            bool finger_present = false;
+            uint16_t heart_rate_bpm_x10 = 0;
+            m2p_heart_rate_state_t heart_rate_state = M2P_HEART_RATE_STATE_OFF;
+            uint8_t heart_rate_remaining_seconds = 0;
+            blade_heart_rate_snapshot(&heart_rate_valid,
+                                      &heart_rate_bpm_x10,
+                                      &finger_present,
+                                      &heart_rate_state,
+                                      &heart_rate_remaining_seconds);
 #if MOVE_TO_PLAY_ENABLE_ESPNOW
             send_err = m2p_espnow_send_blade_state(BLADE_NODE_ID,
                                                    sequence,
@@ -4031,7 +4309,12 @@ static void blade_report_task(void *arg)
                                                        (uint32_t)esp_timer_get_time(),
                                                    s_local_battery_valid,
                                                    s_local_battery_percent,
-                                                   s_local_battery_mv);
+                                                   s_local_battery_mv,
+                                                   heart_rate_valid,
+                                                   heart_rate_bpm_x10,
+                                                   finger_present,
+                                                   heart_rate_state,
+                                                   heart_rate_remaining_seconds);
             if (send_err != ESP_OK &&
                 (last_send_error_log_tick == 0 ||
                  elapsed_ms_since(last_send_error_log_tick, now_tick) >= 1000U)) {
@@ -4062,6 +4345,38 @@ static void blade_report_task(void *arg)
         }
 
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(BLADE_POLL_PERIOD_MS));
+    }
+}
+
+static void blade_control_task(void *arg)
+{
+    (void)arg;
+    uint32_t last_sequence = UINT32_MAX;
+
+    while (1) {
+        m2p_espnow_rx_packet_t rx_packet = {0};
+        if (!m2p_espnow_receive(&rx_packet, 250)) {
+            continue;
+        }
+        if (rx_packet.packet.type != M2P_ESPNOW_PACKET_BLADE_CONTROL ||
+            rx_packet.packet.node_id != BLADE_NODE_ID ||
+            rx_packet.packet.sequence == last_sequence) {
+            continue;
+        }
+
+        last_sequence = rx_packet.packet.sequence;
+        const bool start =
+            (rx_packet.packet.flags & M2P_ESPNOW_BLADE_CONTROL_FLAG_START) != 0;
+        uint8_t duration_seconds = rx_packet.packet.heart_rate_remaining_seconds;
+        if (duration_seconds < 5U || duration_seconds > 30U) {
+            duration_seconds = BLADE_HEART_RATE_DEFAULT_MEASUREMENT_SECONDS;
+        }
+        blade_heart_rate_request(start, duration_seconds);
+        ESP_LOGI(TAG,
+                 "heart-rate control received: start=%d duration=%u seq=%" PRIu32,
+                 start ? 1 : 0,
+                 duration_seconds,
+                 last_sequence);
     }
 }
 
@@ -4257,6 +4572,14 @@ static void start_blade_mode(void)
     esp_err_t espnow_err = m2p_espnow_init(M2P_ESPNOW_ROLE_BLADE, M2P_ESPNOW_CHANNEL);
     if (espnow_err != ESP_OK) {
         ESP_LOGW(TAG, "ESP-NOW init failed: %s", esp_err_to_name(espnow_err));
+    } else {
+        xTaskCreatePinnedToCore(blade_control_task,
+                                "blade_control",
+                                3072,
+                                NULL,
+                                7,
+                                NULL,
+                                tskNO_AFFINITY);
     }
 #else
     ESP_LOGI(TAG, "ESP-NOW disabled by MOVE_TO_PLAY_ENABLE_ESPNOW");

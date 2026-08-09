@@ -22,6 +22,8 @@ public sealed class DemoTelemetryService : ITelemetrySource
     private int _seconds;
     private int _actionIndex;
     private int _heartRate = 96;
+    private HeartRateMeasurementState _heartRateState = HeartRateMeasurementState.Off;
+    private int _heartRateRemaining;
     private double _calories;
 
     public DemoTelemetryService()
@@ -31,6 +33,22 @@ public sealed class DemoTelemetryService : ITelemetrySource
 
     public event EventHandler<TelemetrySnapshot>? SnapshotChanged;
     public event EventHandler<TelemetrySourceStatus>? StatusChanged;
+
+    public bool StartHeartRateMeasurement(int durationSeconds)
+    {
+        _heartRateState = HeartRateMeasurementState.Measuring;
+        _heartRateRemaining = Math.Clamp(durationSeconds, 5, 30);
+        Publish(celebrate: false);
+        return true;
+    }
+
+    public bool StopHeartRateMeasurement()
+    {
+        _heartRateState = HeartRateMeasurementState.Off;
+        _heartRateRemaining = 0;
+        Publish(celebrate: false);
+        return true;
+    }
 
     public void Start()
     {
@@ -61,9 +79,17 @@ public sealed class DemoTelemetryService : ITelemetrySource
         }
 
         var action = _actions[_actionIndex];
-        _heartRate += Math.Sign(action.BaseHeartRate - _heartRate) * Math.Min(4, Math.Abs(action.BaseHeartRate - _heartRate));
-        _heartRate += _random.Next(-2, 3);
-        _heartRate = Math.Clamp(_heartRate, 82, 178);
+        if (_heartRateState != HeartRateMeasurementState.Complete)
+        {
+            _heartRate += Math.Sign(action.BaseHeartRate - _heartRate) * Math.Min(4, Math.Abs(action.BaseHeartRate - _heartRate));
+            _heartRate += _random.Next(-2, 3);
+            _heartRate = Math.Clamp(_heartRate, 82, 178);
+        }
+        if (_heartRateState == HeartRateMeasurementState.Measuring && --_heartRateRemaining <= 0)
+        {
+            _heartRateRemaining = 0;
+            _heartRateState = HeartRateMeasurementState.Complete;
+        }
 
         const double demoWeightKg = 68.0;
         _calories += action.Met * 3.5 * demoWeightKg / 200.0 / 60.0;
@@ -87,7 +113,9 @@ public sealed class DemoTelemetryService : ITelemetrySource
         SnapshotChanged?.Invoke(this, new TelemetrySnapshot(
             action.Name,
             action.Hint,
-            _heartRate,
+            _heartRateState == HeartRateMeasurementState.Complete ? _heartRate : null,
+            _heartRateState,
+            _heartRateRemaining,
             _calories,
             TimeSpan.FromSeconds(_seconds),
             Math.Clamp((int)(_calories / 8.0 * 100.0), 0, 100),
@@ -96,6 +124,9 @@ public sealed class DemoTelemetryService : ITelemetrySource
             celebrate,
             92,
             64,
+            true,
+            (uint)(_seconds / 6),
+            action.Name,
             4,
             100,
             true,

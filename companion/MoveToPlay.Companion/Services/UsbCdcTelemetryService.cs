@@ -62,6 +62,21 @@ public sealed class UsbCdcTelemetryService : ITelemetrySource
         [JsonPropertyName("blade_online")]
         public bool BladeOnline { get; init; }
 
+        [JsonPropertyName("heart_rate_bpm")]
+        public int HeartRateBpm { get; init; }
+
+        [JsonPropertyName("heart_rate_valid")]
+        public bool HeartRateValid { get; init; }
+
+        [JsonPropertyName("finger_present")]
+        public bool FingerPresent { get; init; }
+
+        [JsonPropertyName("heart_rate_state")]
+        public int HeartRateState { get; init; }
+
+        [JsonPropertyName("heart_rate_remaining")]
+        public int HeartRateRemaining { get; init; }
+
         [JsonPropertyName("battery")]
         public int[]? Battery { get; init; }
     }
@@ -109,6 +124,35 @@ public sealed class UsbCdcTelemetryService : ITelemetrySource
 
     public event EventHandler<TelemetrySnapshot>? SnapshotChanged;
     public event EventHandler<TelemetrySourceStatus>? StatusChanged;
+
+    public bool StartHeartRateMeasurement(int durationSeconds) =>
+        durationSeconds is >= 5 and <= 30 &&
+        TryWriteCommand($"M2P:HR_START:{durationSeconds}");
+
+    public bool StopHeartRateMeasurement() => TryWriteCommand("M2P:HR_STOP");
+
+    private bool TryWriteCommand(string command)
+    {
+        lock (_portGate)
+        {
+            try
+            {
+                if (_activePort is not { IsOpen: true } port)
+                {
+                    return false;
+                }
+                port.WriteLine(command);
+                return true;
+            }
+            catch (Exception exception) when (exception is IOException or
+                                              InvalidOperationException or
+                                              TimeoutException or
+                                              UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
+    }
 
     public void Start()
     {
@@ -305,6 +349,16 @@ public sealed class UsbCdcTelemetryService : ITelemetrySource
         bladeOnline = packet.BladeOnline;
         var confidence = Math.Clamp(packet.Confidence, 0, 100);
         var intensity = Math.Clamp(packet.Intensity, 0, 100);
+        var heartRateState = packet.HeartRateState is >= 0 and <= 4
+            ? (HeartRateMeasurementState)packet.HeartRateState
+            : HeartRateMeasurementState.Failed;
+        int? heartRate = packet.BladeOnline &&
+                         packet.FingerPresent &&
+                         packet.HeartRateValid &&
+                         heartRateState == HeartRateMeasurementState.Complete &&
+                         packet.HeartRateBpm is >= 40 and <= 200
+            ? packet.HeartRateBpm
+            : null;
         var deltaSeconds = CalculateDeltaSeconds(packet.TimeMs);
         var presentation = PresentationFor(packet.Action);
 
@@ -328,7 +382,9 @@ public sealed class UsbCdcTelemetryService : ITelemetrySource
         SnapshotChanged?.Invoke(this, new TelemetrySnapshot(
             presentation.Name,
             presentation.Hint,
-            null,
+            heartRate,
+            heartRateState,
+            Math.Clamp(packet.HeartRateRemaining, 0, 30),
             _calories,
             TimeSpan.FromSeconds(_activeSeconds),
             Math.Clamp((int)Math.Round(_calories / DefaultGoalCalories * 100.0), 0, 100),
@@ -337,6 +393,11 @@ public sealed class UsbCdcTelemetryService : ITelemetrySource
             celebrate,
             confidence,
             intensity,
+            packet.Active,
+            packet.EventCount,
+            string.IsNullOrWhiteSpace(packet.EventAction)
+                ? string.Empty
+                : PresentationFor(packet.EventAction).Name,
             trackerOnline,
             quality,
             packet.BladeOnline,

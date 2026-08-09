@@ -14,7 +14,7 @@
   "hudFontFamily": "Microsoft YaHei UI",
   "statusText": "ADVENTURE READY",
   "actionLabel": "当前动作",
-  "goalLabel": "今日冒险目标",
+  "goalLabel": "本次冒险目标",
   "markerGlyph": "✦",
   "squareProgress": false,
   "idleMessage": "旅途状态良好 · 动作识别稳定",
