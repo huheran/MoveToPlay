@@ -1507,6 +1507,13 @@ public partial class TrainingWindow : Window
             MessageBox.Show(this, $"已成功回滚并烧录 {selected.VersionDisplay}。", "模型回滚完成",
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
+        catch (Exception exception)
+        {
+            RollbackProgress.IsIndeterminate = false;
+            RollbackStatusText.Text = "模型回滚失败；当前 Dongle 固件状态未被软件标记为已切换";
+            MessageBox.Show(this, exception.Message, "模型回滚失败",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
         finally
         {
             RebuildModelFirmwareButton.IsEnabled = ModelVersionList.SelectedItem is CloudJob;
