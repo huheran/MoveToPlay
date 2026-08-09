@@ -5,7 +5,8 @@ public sealed record ImuCollectionStatus(
     string Detail,
     long SampleCount,
     int[] OnlineNodes,
-    int EventCount);
+    int EventCount,
+    bool BladeOnline);
 
 public sealed record TrainingLabelOption(string Id, string DisplayName)
 {
@@ -33,4 +34,7 @@ public sealed record BladeCountdownStatus(
     int RemainingMilliseconds,
     bool IsGo,
     bool IsCompleted,
-    bool IsCancelled = false);
+    bool IsCancelled = false,
+    int CompletedCount = 0,
+    int TargetCount = 0,
+    bool IsPreparation = false);

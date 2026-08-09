@@ -117,14 +117,18 @@ public sealed class UsbCdcTelemetryService : ITelemetrySource
             return;
         }
 
+        _cancellation?.Dispose();
         _cancellation = new CancellationTokenSource();
+        _lastStatusKey = null;
         PublishStatus(false, "SEARCHING", "正在搜索 MoveToPlay Dongle");
         _worker = Task.Run(() => RunAsync(_cancellation.Token));
     }
 
     public void Stop()
     {
-        _cancellation?.Cancel();
+        var cancellation = _cancellation;
+        var worker = _worker;
+        cancellation?.Cancel();
         lock (_portGate)
         {
             try
@@ -137,6 +141,27 @@ public sealed class UsbCdcTelemetryService : ITelemetrySource
             }
             _activePort = null;
         }
+        if (worker is not null && worker.Id != Task.CurrentId)
+        {
+            try
+            {
+                worker.Wait(TimeSpan.FromSeconds(3));
+            }
+            catch (AggregateException)
+            {
+                // Cancellation or USB removal can complete the reader with an exception.
+            }
+        }
+        if (ReferenceEquals(_worker, worker))
+        {
+            _worker = null;
+        }
+        if (ReferenceEquals(_cancellation, cancellation))
+        {
+            _cancellation = null;
+        }
+        cancellation?.Dispose();
+        _lastStatusKey = null;
         PublishStatus(false, "OFFLINE", "Dongle 连接已关闭");
     }
 
