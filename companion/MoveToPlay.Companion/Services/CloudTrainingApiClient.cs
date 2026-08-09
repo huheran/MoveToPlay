@@ -123,6 +123,12 @@ public sealed class CloudTrainingApiClient : IDisposable
     public Task<CloudJob[]> ListJobsAsync(CancellationToken cancellationToken = default) =>
         SendJsonAsync<CloudJob[]>(HttpMethod.Get, "/api/v1/jobs", null, cancellationToken);
 
+    public Task<CloudJob[]> ListModelsAsync(CancellationToken cancellationToken = default) =>
+        SendJsonAsync<CloudJob[]>(HttpMethod.Get, "/api/v1/models", null, cancellationToken);
+
+    public Task<CloudJob> ActivateModelAsync(string jobId, CancellationToken cancellationToken = default) =>
+        SendJsonAsync<CloudJob>(HttpMethod.Post, $"/api/v1/models/{jobId}/activate", new { }, cancellationToken);
+
     public async Task<CloudJob> WaitForJobAsync(
         string jobId,
         Action<CloudJob>? changed = null,
@@ -132,9 +138,10 @@ public sealed class CloudTrainingApiClient : IDisposable
         while (true)
         {
             var job = await GetJobAsync(jobId, cancellationToken);
-            if (!string.Equals(job.Status, previous, StringComparison.Ordinal))
+            var signature = $"{job.Status}|{job.ProgressStage}|{job.ProgressPercent:0.0}|{job.ElapsedSeconds}|{job.EstimatedRemainingSeconds}|{job.ProgressDetail}";
+            if (!string.Equals(signature, previous, StringComparison.Ordinal))
             {
-                previous = job.Status;
+                previous = signature;
                 changed?.Invoke(job);
             }
             if (job.Status is not ("queued" or "running"))

@@ -12,12 +12,14 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
+from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse
 
 from .config import Settings
 from .database import Database
+from .oss_backup import backup_approved_model, remove_backup_staging
 from .schemas import ApprovalCreate, DatasetCreate, JobCreate
 from .storage import dataset_dir, dataset_file, sha256_file, validate_csv_header
 
@@ -45,7 +47,7 @@ def dataset_response(row: dict) -> dict:
 
 
 def job_response(row: dict) -> dict:
-    return {
+    response = {
         key: row[key]
         for key in (
             "id",
@@ -58,8 +60,40 @@ def job_response(row: dict) -> dict:
             "error",
             "approved_at",
             "approved_by",
+            "progress_stage",
+            "progress_detail",
+            "progress_percent",
+            "estimated_remaining_seconds",
+            "model_version",
+            "is_active_model",
+            "oss_backup_status",
+            "oss_object_key",
+            "oss_backed_up_at",
+            "oss_backup_error",
+            "artifacts_cleaned_at",
         )
     }
+    elapsed = 0
+    if row.get("started_at"):
+        try:
+            started = datetime.fromisoformat(row["started_at"])
+            end = datetime.fromisoformat(row["finished_at"]) if row.get("finished_at") else datetime.now(timezone.utc)
+            elapsed = max(0, int((end - started).total_seconds()))
+        except (TypeError, ValueError):
+            elapsed = 0
+    response["elapsed_seconds"] = elapsed
+    response["is_active_model"] = bool(row.get("is_active_model"))
+    if row.get("status") == "running" and row.get("estimated_remaining_seconds") is not None:
+        since_update = 0
+        try:
+            updated = datetime.fromisoformat(row["progress_updated_at"])
+            since_update = max(0, int((datetime.now(timezone.utc) - updated).total_seconds()))
+        except (TypeError, ValueError):
+            pass
+        response["estimated_remaining_seconds"] = max(
+            0, int(row["estimated_remaining_seconds"]) - since_update
+        )
+    return response
 
 
 async def require_api_token(request: Request) -> None:
@@ -85,9 +119,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         active_settings.ensure_directories()
         database = Database(active_settings.database_path)
         database.initialize()
+        remove_backup_staging(active_settings)
         application.state.database = database
         application.state.settings = active_settings
         application.state.upload_locks = defaultdict(asyncio.Lock)
+        application.state.backup_tasks = set()
+        for model in database.list_models():
+            if model.get("run_dir") and model.get("oss_backup_status") != "completed":
+                task = asyncio.create_task(asyncio.to_thread(
+                    backup_approved_model,
+                    active_settings,
+                    active_settings.database_path,
+                    str(model["id"]),
+                    str(model["run_dir"]),
+                ))
+                application.state.backup_tasks.add(task)
+                task.add_done_callback(application.state.backup_tasks.discard)
         yield
 
     application = FastAPI(
@@ -109,7 +156,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     protected = [Depends(require_api_token)]
 
     @application.get("/api/v1/system-config", dependencies=protected)
-    def system_config(request: Request) -> dict[str, str | None]:
+    def system_config(request: Request) -> dict[str, object]:
         official_dataset_id = request.app.state.settings.official_dataset_id
         if official_dataset_id is not None:
             official = request.app.state.database.get_dataset(official_dataset_id)
@@ -118,7 +165,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     status_code=503,
                     detail="official dataset is missing or not ready",
                 )
-        return {"official_dataset_id": official_dataset_id}
+        return {
+            "official_dataset_id": official_dataset_id,
+            "oss_backup_configured": active_settings.oss_configured,
+            "cleanup_policy": {
+                "approved_models": "永久保留本地副本并备份 OSS",
+                "failed_days": active_settings.cleanup_failed_days,
+                "validated_days": active_settings.cleanup_validated_days,
+                "unapproved_passed_days": active_settings.cleanup_unapproved_days,
+            },
+        }
 
     @application.post("/api/v1/datasets", status_code=201, dependencies=protected)
     def create_dataset(payload: DatasetCreate, request: Request) -> dict:
@@ -278,7 +334,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return job_response(row)
 
     @application.post("/api/v1/jobs/{job_id}/approve", dependencies=protected)
-    def approve_job(job_id: str, payload: ApprovalCreate, request: Request) -> dict:
+    def approve_job(
+        job_id: str,
+        payload: ApprovalCreate,
+        request: Request,
+        background_tasks: BackgroundTasks,
+    ) -> dict:
         row = request.app.state.database.get_job(job_id)
         if row is None:
             raise HTTPException(status_code=404, detail="job not found")
@@ -305,7 +366,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     json.dumps(approval, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
                 )
                 temporary.replace(run_dir / "approval.json")
+                background_tasks.add_task(
+                    backup_approved_model,
+                    request.app.state.settings,
+                    request.app.state.settings.database_path,
+                    job_id,
+                    str(run_dir),
+                )
         return job_response(approved)
+
+    @application.get("/api/v1/models", dependencies=protected)
+    def list_models(request: Request) -> list[dict]:
+        return [job_response(row) for row in request.app.state.database.list_models()]
+
+    @application.post("/api/v1/models/{job_id}/activate", dependencies=protected)
+    def activate_model(job_id: str, request: Request) -> dict:
+        if not request.app.state.database.activate_model(job_id):
+            raise HTTPException(status_code=409, detail="only an approved passed model can be activated")
+        row = request.app.state.database.get_job(job_id)
+        assert row is not None
+        return job_response(row)
 
     @application.get("/api/v1/jobs/{job_id}/artifacts", dependencies=protected)
     def list_artifacts(job_id: str, request: Request) -> list[dict]:

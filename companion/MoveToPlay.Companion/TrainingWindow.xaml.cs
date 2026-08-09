@@ -38,6 +38,8 @@ public partial class TrainingWindow : Window
     private readonly EventCatalogService _eventCatalog = new();
     private readonly ObservableCollection<TrainingEventOption> _eventOptions = [];
     private readonly ObservableCollection<LocalCollectionSession> _collectionSessions = [];
+    private readonly ObservableCollection<CloudJob> _jobHistory = [];
+    private readonly ObservableCollection<CloudJob> _modelVersions = [];
     private readonly TrainingHistoryService _history = new();
     private readonly CollectionLibraryService _collectionLibrary;
     private readonly FirmwareDeploymentService _firmwareDeployment = new();
@@ -95,6 +97,8 @@ public partial class TrainingWindow : Window
             Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "MoveToPlay", "collections");
         DatasetNameText.Text = $"决赛演示采集-{DateTime.Now:yyyy-MM-dd-HHmm}";
         CollectionSessionList.ItemsSource = _collectionSessions;
+        JobHistoryList.ItemsSource = _jobHistory;
+        ModelVersionList.ItemsSource = _modelVersions;
         UpdateCollectorBladeSettings();
         _collector.StatusChanged += Collector_StatusChanged;
         _collector.CountdownChanged += Collector_CountdownChanged;
@@ -104,6 +108,7 @@ public partial class TrainingWindow : Window
         {
             RefreshPorts();
             RefreshFirmwarePorts();
+            RefreshRollbackPorts();
             RefreshCollectionLibrary();
             LoadCachedResult();
             _deviceStatusTimer.Start();
@@ -737,6 +742,7 @@ public partial class TrainingWindow : Window
             SetCloudStatus("阿里云已安全连接", "#FF2DD4BF");
             ConnectCloudButton.Content = "重新连接";
             UpdateTrainEnabled();
+            await RefreshHistoryAsync(CancellationToken.None);
             return true;
         }
         catch (Exception exception)
@@ -802,6 +808,7 @@ public partial class TrainingWindow : Window
         var cancellationToken = _operationCancellation.Token;
         try
         {
+            ResetTrainingPresentation("正在准备上传数据");
             JobStatusText.Text = "正在计算文件哈希并登记数据集";
             if (_activeDataset is null || _activeDataset.Status != "uploading")
             {
@@ -828,20 +835,24 @@ public partial class TrainingWindow : Window
             UploadProgressText.Text = "上传完成，服务器已核对长度、SHA-256 和 CSV 表头";
 
             _activeJob = await _api.CreateJobAsync(_activeDataset.Id, "train", cancellationToken);
+            _artifacts = [];
+            ArtifactList.ItemsSource = Array.Empty<string>();
+            MetricsText.Text = "模型训练中；准确率、Macro F1 和质量门禁将在训练完成后显示。";
             ExistingJobIdText.Text = _activeJob.Id;
             _history.SaveLastJob(_activeJob.Id, _activeJob.DatasetId, _activeJob.Status);
             JobIdentityText.Text = $"JOB {_activeJob.Id}\nDATASET {_activeDataset.Id}";
             _activeJob = await _api.WaitForJobAsync(_activeJob.Id, job =>
             {
-                _ = Dispatcher.BeginInvoke(() => JobStatusText.Text = JobStatusChinese(job.Status));
+                _ = Dispatcher.BeginInvoke(() => UpdateTrainingPresentation(job));
             }, cancellationToken);
-            JobStatusText.Text = JobStatusChinese(_activeJob.Status);
+            UpdateTrainingPresentation(_activeJob);
             _history.SaveLastJob(_activeJob.Id, _activeJob.DatasetId, _activeJob.Status);
             if (_activeJob.Status != "passed")
             {
                 MetricsText.Text = string.IsNullOrWhiteSpace(_activeJob.Error) ? "训练未通过，请下载日志检查。" : _activeJob.Error;
             }
             await RefreshArtifactsAndMetricsAsync(cancellationToken);
+            await RefreshHistoryAsync(cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -865,6 +876,17 @@ public partial class TrainingWindow : Window
     {
         if (_api is null || _activeJob is null)
         {
+            return;
+        }
+        UpdateTrainingPresentation(_activeJob);
+        if (_activeJob.Status is "queued" or "running")
+        {
+            _artifacts = [];
+            ArtifactList.ItemsSource = Array.Empty<string>();
+            DownloadArtifactsButton.IsEnabled = false;
+            ApproveButton.IsEnabled = false;
+            BuildFirmwareButton.IsEnabled = false;
+            MetricsText.Text = "模型训练中；训练完成后再显示准确率、Macro F1、质量门禁和模型产物。";
             return;
         }
         _artifacts = await _api.ListArtifactsAsync(_activeJob.Id, cancellationToken);
@@ -943,7 +965,7 @@ public partial class TrainingWindow : Window
         {
             _activeJob = await _api.GetJobAsync(jobId);
             JobIdentityText.Text = $"JOB {_activeJob.Id}\nDATASET {_activeJob.DatasetId}";
-            JobStatusText.Text = JobStatusChinese(_activeJob.Status);
+            UpdateTrainingPresentation(_activeJob);
             _history.SaveLastJob(_activeJob.Id, _activeJob.DatasetId, _activeJob.Status);
             await RefreshArtifactsAndMetricsAsync(CancellationToken.None);
         }
@@ -970,6 +992,11 @@ public partial class TrainingWindow : Window
         {
             MetricsText.Text = MetricsFromManifest(File.ReadAllText(manifestPath));
             JobStatusText.Text = "已载入本机缓存的上次训练结果（离线可查看）";
+            TrainingStageText.Text = "本机缓存模型已完成";
+            TrainingProgress.IsIndeterminate = false;
+            TrainingProgress.Value = 100;
+            TrainingProgressText.Text = "100%";
+            TrainingTimeText.Text = "离线缓存 · 可连接云端刷新详情";
             JobIdentityText.Text = $"JOB {jobId} · LOCAL CACHE";
             var cacheDirectory = _history.CacheDirectory(jobId);
             ArtifactList.ItemsSource = Directory.EnumerateFiles(cacheDirectory, "*", SearchOption.AllDirectories)
@@ -981,6 +1008,195 @@ public partial class TrainingWindow : Window
         {
             MetricsText.Text = $"本机缓存无法读取：{exception.Message}";
         }
+    }
+
+    private void ResetTrainingPresentation(string stage)
+    {
+        TrainingProgress.Value = 0;
+        TrainingProgress.IsIndeterminate = false;
+        TrainingStageText.Text = stage;
+        TrainingProgressText.Text = "0%";
+        TrainingTimeText.Text = "已用 00:00 · 剩余 —";
+        MetricsText.Text = "训练中；完成后显示准确率、Macro F1 与质量门禁。";
+        ArtifactList.ItemsSource = Array.Empty<string>();
+        DownloadArtifactsButton.IsEnabled = false;
+        ApproveButton.IsEnabled = false;
+    }
+
+    private void UpdateTrainingPresentation(CloudJob job)
+    {
+        JobStatusText.Text = JobStatusChinese(job.Status);
+        var isRunning = job.Status is "queued" or "running";
+        TrainingProgress.IsIndeterminate = job.Status == "queued";
+        TrainingProgress.Value = job.Status is "passed" or "validated" ? 100 : Math.Clamp(job.ProgressPercent, 0, 100);
+        TrainingStageText.Text = job.Status switch
+        {
+            "queued" => "等待云端训练资源",
+            "running" => job.ProgressDetail ?? TrainingStageChinese(job.ProgressStage),
+            "passed" => "训练、评估、质量门禁和 C 数组导出全部完成",
+            "validated" => "数据集校验完成",
+            "failed" => "训练中断，请查看错误信息",
+            _ => job.ProgressDetail ?? "等待任务状态",
+        };
+        TrainingProgressText.Text = job.Status is "passed" or "validated"
+            ? "100%"
+            : $"{Math.Clamp(job.ProgressPercent, 0, 100):0}%";
+        var remaining = job.EstimatedRemainingSeconds is int seconds && isRunning
+            ? FormatDuration(seconds)
+            : "—";
+        TrainingTimeText.Text = $"已用 {FormatDuration(job.ElapsedSeconds)} · 预计剩余 {remaining}";
+        if (isRunning)
+        {
+            MetricsText.Text = "模型训练中；完成后再显示准确率、Macro F1 和质量门禁。";
+        }
+    }
+
+    private static string FormatDuration(int seconds)
+    {
+        var duration = TimeSpan.FromSeconds(Math.Max(0, seconds));
+        return duration.TotalHours >= 1
+            ? $"{(int)duration.TotalHours:00}:{duration.Minutes:00}:{duration.Seconds:00}"
+            : $"{duration.Minutes:00}:{duration.Seconds:00}";
+    }
+
+    private static string TrainingStageChinese(string? stage) => stage switch
+    {
+        "preparing" => "正在准备并合并训练数据",
+        "validating" => "正在校验数据集",
+        "validated" => "数据校验完成",
+        "training_state" => "正在训练连续状态随机森林",
+        "evaluating_state" => "正在评估状态模型",
+        "exporting_state" => "正在导出状态模型 C 数组",
+        "state_complete" => "状态模型已完成",
+        "training_event" => "正在训练动作事件随机森林",
+        "evaluating_event" => "正在评估动作事件模型",
+        "exporting_event" => "正在导出动作模型 C 数组",
+        "quality_gate" => "正在执行质量门禁",
+        "finalizing" => "正在生成并校验模型产物",
+        _ => "云端正在训练模型",
+    };
+
+    private async void RefreshHistory_Click(object sender, RoutedEventArgs e)
+    {
+        if (await ConnectCloudAsync())
+        {
+            await RefreshHistoryAsync(CancellationToken.None);
+        }
+    }
+
+    private async Task RefreshHistoryAsync(CancellationToken cancellationToken)
+    {
+        if (_api is null)
+        {
+            return;
+        }
+        try
+        {
+            var jobsTask = _api.ListJobsAsync(cancellationToken);
+            var modelsTask = _api.ListModelsAsync(cancellationToken);
+            await Task.WhenAll(jobsTask, modelsTask);
+            _jobHistory.Clear();
+            foreach (var job in jobsTask.Result)
+            {
+                _jobHistory.Add(job);
+            }
+            _modelVersions.Clear();
+            foreach (var model in modelsTask.Result)
+            {
+                _modelVersions.Add(model);
+            }
+            HistoryStatusText.Text = $"共 {_jobHistory.Count} 个任务 · {_modelVersions.Count} 个已批准模型";
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            HistoryStatusText.Text = $"历史列表读取失败：{exception.Message}";
+        }
+    }
+
+    private void JobHistoryList_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        LoadHistoryJobButton.IsEnabled = JobHistoryList.SelectedItem is CloudJob;
+
+    private void ModelVersionList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var selected = ModelVersionList.SelectedItem is CloudJob;
+        LoadModelVersionButton.IsEnabled = selected;
+        RebuildModelFirmwareButton.IsEnabled = selected;
+        RollbackModelButton.IsEnabled = selected && RollbackPortSelector.SelectedItem is string;
+    }
+
+    private async void LoadSelectedHistoryJob_Click(object sender, RoutedEventArgs e)
+    {
+        if (JobHistoryList.SelectedItem is CloudJob job)
+        {
+            await LoadCloudJobAsync(job.Id, switchToCloudTab: true);
+        }
+    }
+
+    private async void LoadSelectedModel_Click(object sender, RoutedEventArgs e)
+    {
+        if (ModelVersionList.SelectedItem is CloudJob job)
+        {
+            await LoadCloudJobAsync(job.Id, switchToCloudTab: true);
+        }
+    }
+
+    private async Task<bool> LoadCloudJobAsync(string jobId, bool switchToCloudTab)
+    {
+        if (!await ConnectCloudAsync() || _api is null)
+        {
+            return false;
+        }
+        try
+        {
+            _activeJob = await _api.GetJobAsync(jobId);
+            ExistingJobIdText.Text = _activeJob.Id;
+            JobIdentityText.Text = $"JOB {_activeJob.Id}\nDATASET {_activeJob.DatasetId}";
+            UpdateTrainingPresentation(_activeJob);
+            _history.SaveLastJob(_activeJob.Id, _activeJob.DatasetId, _activeJob.Status);
+            await RefreshArtifactsAndMetricsAsync(CancellationToken.None);
+            _firmwarePackage = null;
+            FirmwareProgress.Value = 0;
+            if (switchToCloudTab)
+            {
+                TrainingTabs.SelectedIndex = 2;
+            }
+            return true;
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, exception.Message, "加载历史任务失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            return false;
+        }
+    }
+
+    private void RefreshRollbackPorts_Click(object sender, RoutedEventArgs e) => RefreshRollbackPorts();
+
+    private void RollbackPortSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (RollbackModelButton is not null)
+        {
+            RollbackModelButton.IsEnabled = ModelVersionList.SelectedItem is CloudJob &&
+                RollbackPortSelector.SelectedItem is string;
+        }
+    }
+
+    private void RefreshRollbackPorts()
+    {
+        var previous = RollbackPortSelector.SelectedItem as string;
+        var ports = ImuCollectionService.GetPortNames();
+        RollbackPortSelector.ItemsSource = ports;
+        RollbackPortSelector.SelectedItem = ports.FirstOrDefault(port =>
+            port.Equals(previous, StringComparison.OrdinalIgnoreCase));
+        if (RollbackPortSelector.SelectedIndex < 0 && ports.Length > 0)
+        {
+            RollbackPortSelector.SelectedIndex = ports.Length - 1;
+        }
+        RollbackModelButton.IsEnabled = ModelVersionList.SelectedItem is CloudJob &&
+            RollbackPortSelector.SelectedItem is string;
     }
 
     private static bool IsEssentialModelArtifact(CloudArtifact artifact) =>
@@ -1052,6 +1268,7 @@ public partial class TrainingWindow : Window
             ApproveButton.Content = $"已由 {_activeJob.ApprovedBy} 确认采用";
             JobStatusText.Text = "模型已确认采用，可以生成 Dongle 固件";
             await RefreshArtifactsAndMetricsAsync(CancellationToken.None);
+            await RefreshHistoryAsync(CancellationToken.None);
         }
         catch (Exception exception)
         {
@@ -1085,12 +1302,27 @@ public partial class TrainingWindow : Window
             MessageBox.Show(this, "请先等待训练通过并点击“确认采用本次模型”。", "模型尚未确认", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
+        await BuildActiveFirmwareAsync();
+    }
+
+    private async Task<bool> BuildActiveFirmwareAsync(IProgress<FirmwareDeploymentProgress>? externalProgress = null)
+    {
+        if (_activeJob is null || _activeJob.Status != "passed" || string.IsNullOrWhiteSpace(_activeJob.ApprovedAt))
+        {
+            return false;
+        }
         _firmwareCancellation?.Cancel();
         _firmwareCancellation?.Dispose();
         _firmwareCancellation = new CancellationTokenSource();
         SetFirmwareBusy(true);
+        FirmwareProgress.Value = 0;
         var progress = new Progress<FirmwareDeploymentProgress>(value =>
-            FirmwareStatusText.Text = $"{value.Stage}：{value.Detail}");
+        {
+            FirmwareStatusText.Text = $"{value.Stage}：{value.Detail}";
+            FirmwareProgress.IsIndeterminate = value.IsIndeterminate;
+            FirmwareProgress.Value = value.Percent;
+            externalProgress?.Report(value);
+        });
         try
         {
             _firmwarePackage = await _firmwareDeployment.BuildDongleAsync(
@@ -1102,15 +1334,18 @@ public partial class TrainingWindow : Window
                 $"固件已生成：{_firmwarePackage.AppBytes / 1024d / 1024d:0.00} MiB；请选择蓝灯 Dongle 的串口后烧录";
             RefreshFirmwarePorts();
             FlashFirmwareButton.IsEnabled = FirmwarePortSelector.SelectedItem is string;
+            return true;
         }
         catch (OperationCanceledException)
         {
             FirmwareStatusText.Text = "固件生成已取消";
+            return false;
         }
         catch (Exception exception)
         {
             FirmwareStatusText.Text = "固件生成失败";
             MessageBox.Show(this, exception.Message, "生成 Dongle 固件失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            return false;
         }
         finally
         {
@@ -1140,12 +1375,30 @@ public partial class TrainingWindow : Window
         {
             return;
         }
+        await FlashActiveFirmwareAsync(port, showCompletionDialog: true);
+    }
+
+    private async Task<bool> FlashActiveFirmwareAsync(
+        string port,
+        bool showCompletionDialog,
+        IProgress<FirmwareDeploymentProgress>? externalProgress = null)
+    {
+        if (_firmwarePackage is null)
+        {
+            return false;
+        }
         _firmwareCancellation?.Cancel();
         _firmwareCancellation?.Dispose();
         _firmwareCancellation = new CancellationTokenSource();
         SetFirmwareBusy(true);
+        FirmwareProgress.Value = 0;
         var progress = new Progress<FirmwareDeploymentProgress>(value =>
-            FirmwareStatusText.Text = $"{value.Stage}：{value.Detail}");
+        {
+            FirmwareStatusText.Text = $"{value.Stage}：{value.Detail}";
+            FirmwareProgress.IsIndeterminate = value.IsIndeterminate;
+            FirmwareProgress.Value = value.Percent;
+            externalProgress?.Report(value);
+        });
         try
         {
             await _firmwareDeployment.FlashDongleAsync(
@@ -1154,20 +1407,111 @@ public partial class TrainingWindow : Window
                 progress,
                 _firmwareCancellation.Token);
             FirmwareStatusText.Text = "烧录完成；新动作将在此固件的 Wi-Fi 映射页面中出现并默认禁用";
-            MessageBox.Show(this, "新模型固件已烧录完成。请让 Dongle 重启回绿色 Play，再进入 Wi-Fi 页面配置新增动作的按键。", "烧录完成", MessageBoxButton.OK, MessageBoxImage.Information);
+            if (showCompletionDialog)
+            {
+                MessageBox.Show(this, "新模型固件已烧录完成。请让 Dongle 重启回绿色 Play，再进入 Wi-Fi 页面配置新增动作的按键。", "烧录完成", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            return true;
         }
         catch (OperationCanceledException)
         {
             FirmwareStatusText.Text = "烧录已取消；请重新进入维护模式后重试";
+            return false;
         }
         catch (Exception exception)
         {
             FirmwareStatusText.Text = "烧录失败；Dongle 保持维护模式，可重新烧录";
             MessageBox.Show(this, exception.Message, "烧录 Dongle 失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            return false;
         }
         finally
         {
             SetFirmwareBusy(false);
+        }
+    }
+
+    private async void RebuildSelectedModel_Click(object sender, RoutedEventArgs e)
+    {
+        if (ModelVersionList.SelectedItem is not CloudJob selected)
+        {
+            return;
+        }
+        if (!await LoadCloudJobAsync(selected.Id, switchToCloudTab: true))
+        {
+            return;
+        }
+        await BuildActiveFirmwareAsync();
+    }
+
+    private async void RollbackSelectedModel_Click(object sender, RoutedEventArgs e)
+    {
+        if (ModelVersionList.SelectedItem is not CloudJob selected ||
+            RollbackPortSelector.SelectedItem is not string port)
+        {
+            MessageBox.Show(this, "请选择历史模型和蓝灯 Dongle 的烧录串口。", "回滚条件不足",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        var confirmation = MessageBox.Show(
+            this,
+            $"将回滚到 {selected.VersionDisplay}，自动重新生成固件并通过 {port} 烧录。\n\n" +
+            "请确认 Dongle 已进入蓝灯维护模式，烧录期间不要拔线。是否继续？",
+            "一键回滚模型",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (confirmation != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        RollbackModelButton.IsEnabled = false;
+        RebuildModelFirmwareButton.IsEnabled = false;
+        RollbackProgress.Value = 0;
+        try
+        {
+            RollbackStatusText.Text = "正在下载并校验历史模型 C 数组";
+            if (!await LoadCloudJobAsync(selected.Id, switchToCloudTab: false))
+            {
+                return;
+            }
+            var buildProgress = new Progress<FirmwareDeploymentProgress>(value =>
+            {
+                RollbackProgress.IsIndeterminate = value.IsIndeterminate;
+                RollbackProgress.Value = value.Percent * 0.55;
+                RollbackStatusText.Text = $"生成固件 · {value.Stage}：{value.Detail}";
+            });
+            if (!await BuildActiveFirmwareAsync(buildProgress))
+            {
+                RollbackStatusText.Text = "历史固件生成失败，未执行烧录";
+                return;
+            }
+            var flashProgress = new Progress<FirmwareDeploymentProgress>(value =>
+            {
+                RollbackProgress.IsIndeterminate = value.IsIndeterminate;
+                RollbackProgress.Value = 55 + value.Percent * 0.45;
+                RollbackStatusText.Text = $"烧录回滚 · {value.Stage}：{value.Detail}";
+            });
+            if (!await FlashActiveFirmwareAsync(port, showCompletionDialog: false, externalProgress: flashProgress))
+            {
+                RollbackStatusText.Text = "回滚烧录未完成，可保持蓝灯模式后重试";
+                return;
+            }
+            if (_api is not null)
+            {
+                _activeJob = await _api.ActivateModelAsync(selected.Id);
+            }
+            RollbackProgress.IsIndeterminate = false;
+            RollbackProgress.Value = 100;
+            RollbackStatusText.Text = $"已回滚到 {selected.VersionDisplay}；请重启 Dongle 回绿色 Play 模式";
+            await RefreshHistoryAsync(CancellationToken.None);
+            MessageBox.Show(this, $"已成功回滚并烧录 {selected.VersionDisplay}。", "模型回滚完成",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        finally
+        {
+            RebuildModelFirmwareButton.IsEnabled = ModelVersionList.SelectedItem is CloudJob;
+            RollbackModelButton.IsEnabled = ModelVersionList.SelectedItem is CloudJob &&
+                RollbackPortSelector.SelectedItem is string;
         }
     }
 

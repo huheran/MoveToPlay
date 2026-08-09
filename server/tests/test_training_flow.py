@@ -149,4 +149,14 @@ def test_upload_validate_and_download_manifest(tmp_path: Path) -> None:
         )
         assert approved.status_code == 200
         assert approved.json()["approved_by"] == "test operator"
+        assert approved.json()["model_version"].startswith("M-")
+        assert approved.json()["is_active_model"] is True
+        models = client.get("/api/v1/models", headers=TOKEN_HEADER)
+        assert models.status_code == 200
+        assert [model["id"] for model in models.json()] == [train_job_id]
+        activated = client.post(f"/api/v1/models/{train_job_id}/activate", headers=TOKEN_HEADER)
+        assert activated.status_code == 200
+        assert activated.json()["is_active_model"] is True
     assert (Path(finished["run_dir"]) / "approval.json").is_file()
+    backed_up = database.get_job(train_job_id)
+    assert backed_up is not None and backed_up["oss_backup_status"] == "not_configured"
