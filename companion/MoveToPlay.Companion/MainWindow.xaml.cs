@@ -82,6 +82,7 @@ public partial class MainWindow : Window
     private IReadOnlyList<GameProfile> _profiles = [];
     private IReadOnlyList<GameWindowTarget> _windowTargets = [];
     private OverlayWindow? _overlayWindow;
+    private OverlayControlWindow? _overlayControlWindow;
     private TrainingWindow? _trainingWindow;
     private HwndSource? _hwndSource;
     private Forms.NotifyIcon? _trayIcon;
@@ -157,6 +158,24 @@ public partial class MainWindow : Window
             return;
         }
 
+        var overlayControlCaptureArgument = Environment.GetCommandLineArgs()
+            .FirstOrDefault(argument => argument.StartsWith("--capture-overlay-control=", StringComparison.OrdinalIgnoreCase));
+        if (overlayControlCaptureArgument is not null)
+        {
+            OpenOverlayControlWindow_Click(this, new RoutedEventArgs());
+            await Task.Delay(700);
+            if (_overlayControlWindow is not null)
+            {
+                var capturePath = Path.GetFullPath(
+                    overlayControlCaptureArgument["--capture-overlay-control=".Length..].Trim('"'));
+                CaptureElementToPng(_overlayControlWindow, capturePath);
+                _overlayControlWindow.Close();
+            }
+            _exitRequested = true;
+            Close();
+            return;
+        }
+
         if (Environment.GetCommandLineArgs().Any(argument => argument.Equals("--show-overlay", StringComparison.OrdinalIgnoreCase)))
         {
             await Task.Delay(500);
@@ -201,6 +220,7 @@ public partial class MainWindow : Window
         _telemetrySource.Stop();
         _telemetrySource.SnapshotChanged -= OnSnapshotChanged;
         _telemetrySource.StatusChanged -= OnTelemetryStatusChanged;
+        _overlayControlWindow?.Close();
         _overlayWindow?.Close();
         System.Windows.Application.Current.SessionEnding -= OnSessionEnding;
 
@@ -412,6 +432,7 @@ public partial class MainWindow : Window
         UpdateOverlayPlacementControls(placement);
         _overlayWindow?.ApplyProfile(profile);
         _overlayWindow?.ApplyPlacement(placement);
+        _overlayControlWindow?.LoadPlacement(placement, _currentResolutionKey, profile.DisplayName);
         ApplyPreviewPosition(placement);
 
         var matchingTarget = _gameWindowService.FindProfileWindow(_windowTargets, profile);
@@ -505,6 +526,11 @@ public partial class MainWindow : Window
             Anchor = anchor.Id,
             OffsetX = OverlayOffsetXSlider.Value,
             OffsetY = OverlayOffsetYSlider.Value,
+            HeaderScale = _currentOverlayPlacement.HeaderScale,
+            ActionScale = _currentOverlayPlacement.ActionScale,
+            MetricsScale = _currentOverlayPlacement.MetricsScale,
+            GoalScale = _currentOverlayPlacement.GoalScale,
+            ToastScale = _currentOverlayPlacement.ToastScale,
         };
         _currentOverlayPlacement = placement;
         UpdateOverlayOffsetLabels();
@@ -646,6 +672,97 @@ public partial class MainWindow : Window
 
     private void ToggleOverlayButton_Click(object sender, RoutedEventArgs e) => ToggleOverlay();
 
+    private void OpenOverlayControlWindow_Click(object sender, RoutedEventArgs e)
+    {
+        if (_overlayControlWindow is { IsLoaded: true })
+        {
+            _overlayControlWindow.Activate();
+            return;
+        }
+        if (ProfileSelector.SelectedItem is not GameProfile profile)
+        {
+            return;
+        }
+
+        _overlayControlWindow = new OverlayControlWindow(
+            _currentOverlayPlacement.Clone(),
+            _currentResolutionKey,
+            profile.DisplayName,
+            ApplyOverlayPlacementFromEditor,
+            ResetOverlayPlacementFromEditor,
+            ChangeOverlayResolutionFromEditor,
+            ToggleOverlay,
+            EnsureOverlayVisibleForEditing,
+            () => _overlayWindow?.IsVisible == true)
+        {
+            Owner = this,
+        };
+        _overlayControlWindow.Closed += (_, _) => _overlayControlWindow = null;
+        _overlayControlWindow.Show();
+    }
+
+    private void ApplyOverlayPlacementFromEditor(OverlayPlacement placement)
+    {
+        if (ProfileSelector.SelectedItem is not GameProfile profile)
+        {
+            return;
+        }
+
+        _currentOverlayPlacement = placement.Clone();
+        UpdateOverlayPlacementControls(placement);
+        _overlayWindow?.ApplyPlacement(placement);
+        _pendingPlacementProfileId = profile.Id;
+        _placementSaveTimer.Stop();
+        _placementSaveTimer.Start();
+    }
+
+    private OverlayPlacement ResetOverlayPlacementFromEditor()
+    {
+        if (ProfileSelector.SelectedItem is not GameProfile profile)
+        {
+            return _currentOverlayPlacement.Clone();
+        }
+
+        var placement = OverlayPlacement.FromProfile(profile);
+        ApplyOverlayPlacementFromEditor(placement);
+        _overlayPlacementService.Save(profile.Id, _currentResolutionKey, placement);
+        _pendingPlacementProfileId = null;
+        _placementSaveTimer.Stop();
+        return placement.Clone();
+    }
+
+    private OverlayPlacement ChangeOverlayResolutionFromEditor(string resolutionKey)
+    {
+        if (ProfileSelector.SelectedItem is not GameProfile profile)
+        {
+            return _currentOverlayPlacement.Clone();
+        }
+
+        SavePendingOverlayPlacement();
+        _currentResolutionKey = resolutionKey;
+        _overlayPlacementService.SaveSelectedResolution(profile.Id, resolutionKey);
+        UpdateOverlayResolutionControl(resolutionKey);
+        var placement = _overlayPlacementService.GetForProfile(profile, resolutionKey);
+        _currentOverlayPlacement = placement.Clone();
+        UpdateOverlayPlacementControls(placement);
+        _overlayWindow?.ApplyPlacement(placement);
+        return placement.Clone();
+    }
+
+    private void EnsureOverlayVisibleForEditing()
+    {
+        EnsureOverlayWindow();
+        if (_overlayWindow!.IsVisible)
+        {
+            return;
+        }
+
+        _overlayWindow.Show();
+        _overlayWindow.RefreshPosition();
+        ToggleOverlayButton.Content = "隐藏悬浮层";
+        OverlayStateText.Text = "正在全屏显示";
+    }
+
     private void OpenTrainingWindow_Click(object sender, RoutedEventArgs e)
     {
         if (_trainingWindow is { IsLoaded: true })
@@ -740,7 +857,6 @@ public partial class MainWindow : Window
         {
             _overlayWindow.Hide();
             ToggleOverlayButton.Content = "显示悬浮层";
-            DashboardOverlayButton.Content = "显示到游戏屏幕";
             OverlayStateText.Text = "当前未显示";
         }
         else
@@ -749,9 +865,9 @@ public partial class MainWindow : Window
             _overlayWindow.RefreshPosition();
             _overlayWindow.ShowEncouragement();
             ToggleOverlayButton.Content = "隐藏悬浮层";
-            DashboardOverlayButton.Content = "隐藏游戏悬浮层";
             OverlayStateText.Text = "正在全屏显示";
         }
+        _overlayControlWindow?.RefreshOverlayStatus();
     }
 
     private void EnsureOverlayWindow()
@@ -777,7 +893,6 @@ public partial class MainWindow : Window
         {
             _overlayWindow.Show();
             ToggleOverlayButton.Content = "隐藏悬浮层";
-            DashboardOverlayButton.Content = "隐藏游戏悬浮层";
             OverlayStateText.Text = "正在全屏显示";
         }
         _overlayWindow.ShowEncouragement();

@@ -165,5 +165,10 @@ public sealed class OverlayPlacementService
         Anchor = OverlayPlacement.NormalizeAnchor(placement.Anchor),
         OffsetX = Math.Clamp(placement.OffsetX, -800.0, 800.0),
         OffsetY = Math.Clamp(placement.OffsetY, -500.0, 500.0),
+        HeaderScale = Math.Clamp(placement.HeaderScale, 0.6, 1.8),
+        ActionScale = Math.Clamp(placement.ActionScale, 0.6, 1.8),
+        MetricsScale = Math.Clamp(placement.MetricsScale, 0.6, 1.8),
+        GoalScale = Math.Clamp(placement.GoalScale, 0.6, 1.8),
+        ToastScale = Math.Clamp(placement.ToastScale, 0.6, 1.8),
     };
 }

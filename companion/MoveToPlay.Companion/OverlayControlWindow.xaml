@@ -1,0 +1,248 @@
+<Window x:Class="MoveToPlay.Companion.OverlayControlWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="悬浮层控制"
+        Width="480" Height="800"
+        MinWidth="460" MinHeight="760"
+        WindowStartupLocation="Manual"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ResizeMode="NoResize"
+        Topmost="True"
+        ShowInTaskbar="False"
+        FontFamily="{StaticResource AppFont}">
+    <Window.Resources>
+        <Style x:Key="ControlButton" TargetType="Button">
+            <Setter Property="Height" Value="38" />
+            <Setter Property="Padding" Value="15,0" />
+            <Setter Property="Foreground" Value="#FFF1F5F9" />
+            <Setter Property="Background" Value="#FF202B3D" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ButtonBorder" Background="{TemplateBinding Background}" CornerRadius="10">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.84" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="PrimaryControlButton" TargetType="Button" BasedOn="{StaticResource ControlButton}">
+            <Setter Property="Foreground" Value="#FF07101A" />
+            <Setter Property="Background" Value="#FFF4D38A" />
+        </Style>
+        <Style TargetType="ComboBox">
+            <Setter Property="Height" Value="38" />
+            <Setter Property="Foreground" Value="#FFF1F5F9" />
+            <Setter Property="Background" Value="#FF0C1320" />
+            <Setter Property="BorderBrush" Value="#FF2A374D" />
+            <Setter Property="ItemContainerStyle">
+                <Setter.Value>
+                    <Style TargetType="ComboBoxItem">
+                        <Setter Property="Padding" Value="10,7" />
+                        <Setter Property="Foreground" Value="#FFE8EEF7" />
+                        <Setter Property="Background" Value="#FF0C1320" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ComboBoxItem">
+                                    <Border x:Name="ItemBorder" Padding="{TemplateBinding Padding}"
+                                            Background="{TemplateBinding Background}" CornerRadius="6">
+                                        <ContentPresenter />
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsHighlighted" Value="True">
+                                            <Setter TargetName="ItemBorder" Property="Background" Value="#FF26344A" />
+                                        </Trigger>
+                                        <Trigger Property="IsSelected" Value="True">
+                                            <Setter TargetName="ItemBorder" Property="Background" Value="#FF33445F" />
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </Setter.Value>
+            </Setter>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <ToggleButton x:Name="DropDownToggle" Focusable="False" ClickMode="Press"
+                                          IsChecked="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border Background="#FF0C1320" BorderBrush="#FF2A374D"
+                                                BorderThickness="1" CornerRadius="9" />
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <ContentPresenter Margin="11,0,34,0" VerticalAlignment="Center" IsHitTestVisible="False"
+                                              Content="{TemplateBinding SelectionBoxItem}" />
+                            <Path Width="8" Height="5" Margin="0,0,12,0" HorizontalAlignment="Right"
+                                  VerticalAlignment="Center" Fill="#FF8C9BB0" Data="M 0 0 L 8 0 L 4 5 Z" />
+                            <Popup x:Name="PART_Popup" AllowsTransparency="True"
+                                   IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom">
+                                <Border Width="{Binding ActualWidth, ElementName=DropDownToggle}" Margin="0,4,0,0"
+                                        Padding="4" Background="#F90A111D" BorderBrush="#FF334158"
+                                        BorderThickness="1" CornerRadius="9">
+                                    <ScrollViewer MaxHeight="260" VerticalScrollBarVisibility="Auto">
+                                        <ItemsPresenter />
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="Slider">
+            <Setter Property="Height" Value="24" />
+            <Setter Property="IsMoveToPointEnabled" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid Background="Transparent">
+                            <Border Height="4" VerticalAlignment="Center" Background="#FF28364B" CornerRadius="2" />
+                            <Track x:Name="PART_Track">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="{x:Static Slider.DecreaseLarge}">
+                                        <RepeatButton.Template><ControlTemplate TargetType="RepeatButton"><Border Background="Transparent" /></ControlTemplate></RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.DecreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Width="15" Height="15">
+                                        <Thumb.Template><ControlTemplate TargetType="Thumb"><Ellipse Fill="#FFF4D38A" Stroke="#FF07101A" StrokeThickness="2" /></ControlTemplate></Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="{x:Static Slider.IncreaseLarge}">
+                                        <RepeatButton.Template><ControlTemplate TargetType="RepeatButton"><Border Background="Transparent" /></ControlTemplate></RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.IncreaseRepeatButton>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border Background="#F5080D16" BorderBrush="#FF344157" BorderThickness="1" CornerRadius="20">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="30" Direction="270" ShadowDepth="12" Opacity="0.55" Color="#FF000000" />
+        </Border.Effect>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="72" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="66" />
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Margin="22,0,14,0" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock FontSize="17" FontWeight="Bold" Foreground="#FFF8FAFC" Text="悬浮层实时控制" />
+                    <TextBlock x:Name="ProfileText" Margin="0,4,0,0" FontSize="10" Foreground="#FF8291A7"
+                               Text="调整会实时显示在游戏屏幕" />
+                </StackPanel>
+                <Button Grid.Column="1" Width="36" Height="34" Background="Transparent" BorderThickness="0"
+                        FontSize="17" Foreground="#FFAAB6C8" Content="×" Click="CloseButton_Click" />
+            </Grid>
+
+            <Grid Grid.Row="1" Margin="22,0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="14" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="14" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <Border Padding="16,14" Background="#FF111927" BorderBrush="#FF202D41" BorderThickness="1" CornerRadius="14">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="12" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Margin="0,0,0,7" FontSize="10" Foreground="#FF8998AD" Text="适配屏幕" />
+                            <ComboBox x:Name="ResolutionSelector" SelectionChanged="ResolutionSelector_SelectionChanged" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Margin="0,0,0,7" FontSize="10" Foreground="#FF8998AD" Text="位置锚点" />
+                            <ComboBox x:Name="AnchorSelector" SelectionChanged="ControlValueChanged" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <Border Grid.Row="2" Padding="16,13" Background="#FF111927" BorderBrush="#FF202D41" BorderThickness="1" CornerRadius="14">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="88" /><ColumnDefinition Width="*" /><ColumnDefinition Width="52" /></Grid.ColumnDefinitions>
+                            <TextBlock VerticalAlignment="Center" FontSize="11" Foreground="#FFD9E2EE" Text="水平位置" />
+                            <Slider x:Name="OffsetXSlider" Grid.Column="1" Minimum="-800" Maximum="800" TickFrequency="5"
+                                    ValueChanged="ControlValueChanged" />
+                            <TextBlock x:Name="OffsetXValue" Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                       FontFamily="Consolas" FontSize="11" Foreground="#FFF4D38A" Text="0" />
+                        </Grid>
+                        <Grid Margin="0,9,0,0">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="88" /><ColumnDefinition Width="*" /><ColumnDefinition Width="52" /></Grid.ColumnDefinitions>
+                            <TextBlock VerticalAlignment="Center" FontSize="11" Foreground="#FFD9E2EE" Text="垂直位置" />
+                            <Slider x:Name="OffsetYSlider" Grid.Column="1" Minimum="-500" Maximum="500" TickFrequency="5"
+                                    ValueChanged="ControlValueChanged" />
+                            <TextBlock x:Name="OffsetYValue" Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                       FontFamily="Consolas" FontSize="11" Foreground="#FFF4D38A" Text="0" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Row="4" Padding="16,14" Background="#FF111927" BorderBrush="#FF202D41" BorderThickness="1" CornerRadius="14">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <Grid>
+                            <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="#FFF1F5F9" Text="分组文字大小" />
+                            <TextBlock HorizontalAlignment="Right" FontSize="9" Foreground="#FF73839A" Text="60% — 180%" />
+                        </Grid>
+                        <UniformGrid Grid.Row="1" Margin="0,11,0,0" Rows="5">
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="88" /><ColumnDefinition Width="*" /><ColumnDefinition Width="52" /></Grid.ColumnDefinitions><TextBlock VerticalAlignment="Center" FontSize="11" Foreground="#FFC8D3E1" Text="主题标题" /><Slider x:Name="HeaderScaleSlider" Grid.Column="1" Minimum="0.6" Maximum="1.8" TickFrequency="0.05" ValueChanged="ControlValueChanged" /><TextBlock x:Name="HeaderScaleValue" Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center" FontFamily="Consolas" FontSize="10" Foreground="#FF80D9FF" /></Grid>
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="88" /><ColumnDefinition Width="*" /><ColumnDefinition Width="52" /></Grid.ColumnDefinitions><TextBlock VerticalAlignment="Center" FontSize="11" Foreground="#FFC8D3E1" Text="当前动作" /><Slider x:Name="ActionScaleSlider" Grid.Column="1" Minimum="0.6" Maximum="1.8" TickFrequency="0.05" ValueChanged="ControlValueChanged" /><TextBlock x:Name="ActionScaleValue" Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center" FontFamily="Consolas" FontSize="10" Foreground="#FF80D9FF" /></Grid>
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="88" /><ColumnDefinition Width="*" /><ColumnDefinition Width="52" /></Grid.ColumnDefinitions><TextBlock VerticalAlignment="Center" FontSize="11" Foreground="#FFC8D3E1" Text="运动统计" /><Slider x:Name="MetricsScaleSlider" Grid.Column="1" Minimum="0.6" Maximum="1.8" TickFrequency="0.05" ValueChanged="ControlValueChanged" /><TextBlock x:Name="MetricsScaleValue" Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center" FontFamily="Consolas" FontSize="10" Foreground="#FF80D9FF" /></Grid>
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="88" /><ColumnDefinition Width="*" /><ColumnDefinition Width="52" /></Grid.ColumnDefinitions><TextBlock VerticalAlignment="Center" FontSize="11" Foreground="#FFC8D3E1" Text="目标进度" /><Slider x:Name="GoalScaleSlider" Grid.Column="1" Minimum="0.6" Maximum="1.8" TickFrequency="0.05" ValueChanged="ControlValueChanged" /><TextBlock x:Name="GoalScaleValue" Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center" FontFamily="Consolas" FontSize="10" Foreground="#FF80D9FF" /></Grid>
+                            <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="88" /><ColumnDefinition Width="*" /><ColumnDefinition Width="52" /></Grid.ColumnDefinitions><TextBlock VerticalAlignment="Center" FontSize="11" Foreground="#FFC8D3E1" Text="激励提示" /><Slider x:Name="ToastScaleSlider" Grid.Column="1" Minimum="0.6" Maximum="1.8" TickFrequency="0.05" ValueChanged="ControlValueChanged" /><TextBlock x:Name="ToastScaleValue" Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center" FontFamily="Consolas" FontSize="10" Foreground="#FF80D9FF" /></Grid>
+                        </UniformGrid>
+                    </Grid>
+                </Border>
+            </Grid>
+
+            <Grid Grid.Row="2" Margin="22,10,22,16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="10" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="10" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Button Grid.Column="0" Style="{StaticResource ControlButton}" Content="恢复默认" Click="ResetButton_Click" />
+                <Button x:Name="ToggleOverlayButton" Grid.Column="2" Style="{StaticResource ControlButton}"
+                        Content="暂时隐藏" Click="ToggleOverlayButton_Click" />
+                <Button Grid.Column="4" Style="{StaticResource PrimaryControlButton}" Content="完成" Click="CloseButton_Click" />
+            </Grid>
+        </Grid>
+    </Border>
+</Window>
