@@ -41,11 +41,16 @@ def _copy_firmware_project(project_root: Path, workspace: Path, generated: Path)
         if not source.is_file():
             raise FileNotFoundError(f"firmware project is missing {relative}")
         shutil.copy2(source, workspace / relative)
-    for directory in ("main", "managed_components"):
+    for directory in ("main",):
         source = project_root / directory
         if not source.is_dir():
             raise FileNotFoundError(f"firmware project is missing {directory}/")
         shutil.copytree(source, workspace / directory)
+    # 本地开发环境可能已经缓存了托管组件；正式发布包只需要 dependencies.lock，
+    # ESP-IDF 会按锁文件从官方组件仓库恢复完全相同的版本。
+    managed = project_root / "managed_components"
+    if managed.is_dir():
+        shutil.copytree(managed, workspace / "managed_components")
 
     destination = workspace / "main" / "generated"
     destination.mkdir(parents=True, exist_ok=True)
