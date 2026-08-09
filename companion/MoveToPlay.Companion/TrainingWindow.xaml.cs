@@ -47,6 +47,7 @@ public partial class TrainingWindow : Window
     private CloudArtifact[] _artifacts = [];
     private FirmwareBuildPackage? _firmwarePackage;
     private CancellationTokenSource? _firmwareCancellation;
+    private CollectionCountdownWindow? _countdownWindow;
     private TrainingEventOption? _editingEvent;
     private PreparedCollectionDataset? _preparedDataset;
     private bool _creatingEvent;
@@ -84,6 +85,7 @@ public partial class TrainingWindow : Window
         CollectionSessionList.ItemsSource = _collectionSessions;
         UpdateCollectorBladeSettings();
         _collector.StatusChanged += Collector_StatusChanged;
+        _collector.CountdownChanged += Collector_CountdownChanged;
         Loaded += (_, _) =>
         {
             RefreshPorts();
@@ -107,7 +109,11 @@ public partial class TrainingWindow : Window
             PortSelector.SelectedIndex = ports.Length - 1;
         }
         CollectionStatusText.Text = ports.Length == 0 ? "未发现串口，请连接 Dongle 后刷新" : $"发现 {ports.Length} 个串口，请选择 Dongle";
+        UpdateCollectionStartEnabled();
     }
+
+    private void CollectionSelection_Changed(object sender, SelectionChangedEventArgs e) =>
+        UpdateCollectionStartEnabled();
 
     private void ChooseCollectionRoot_Click(object sender, RoutedEventArgs e)
     {
@@ -130,6 +136,7 @@ public partial class TrainingWindow : Window
         {
             _collector.SetStateLabel(label.Id);
         }
+        UpdateCollectionStartEnabled();
     }
 
     private void StartCollection_Click(object sender, RoutedEventArgs e)
@@ -137,6 +144,12 @@ public partial class TrainingWindow : Window
         if (PortSelector.SelectedItem is not string port)
         {
             MessageBox.Show(this, "请先选择 Dongle 串口。", "无法开始采集", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (StateLabelSelector.SelectedItem is not TrainingLabelOption ||
+            EventSelector.SelectedItem is not TrainingEventOption)
+        {
+            MessageBox.Show(this, "请先选择连续状态标签和本次单独动作标签。", "采集设置未完成", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
         try
@@ -147,6 +160,9 @@ public partial class TrainingWindow : Window
             StartCollectionButton.IsEnabled = false;
             StopCollectionButton.IsEnabled = true;
             PortSelector.IsEnabled = false;
+            StateLabelSelector.IsEnabled = false;
+            EventSelector.IsEnabled = false;
+            BladeModeSelector.IsEnabled = false;
         }
         catch (Exception exception)
         {
@@ -168,9 +184,16 @@ public partial class TrainingWindow : Window
         StartCollectionButton.IsEnabled = true;
         StopCollectionButton.IsEnabled = false;
         PortSelector.IsEnabled = true;
+        StateLabelSelector.IsEnabled = true;
+        EventSelector.IsEnabled = true;
+        BladeModeSelector.IsEnabled = true;
+        UpdateCollectionStartEnabled();
         if (_collector.SamplesPath is not null && _collector.EventsPath is not null)
         {
-            CollectionFilesText.Text = $"samples: {_collector.SamplesPath}\nevents: {_collector.EventsPath}";
+            CollectionFilesText.Text =
+                $"训练数据 samples: {_collector.SamplesPath}\n" +
+                $"训练标签 events: {_collector.EventsPath}\n" +
+                $"仅供延迟检查（不参与训练）: {_collector.TimingDiagnosticsPath}";
             RefreshCollectionLibrary();
             CollectionLibraryStatusText.Text = "新采集已加入列表，请在“我的采集数据”中勾选后进入训练";
         }
@@ -298,6 +321,36 @@ public partial class TrainingWindow : Window
         }
     }
 
+    private void RestoreDefaultEvents_Click(object sender, RoutedEventArgs e)
+    {
+        var confirmation = MessageBox.Show(
+            this,
+            "将恢复所有缺失的官方默认动作；你自己新增的动作会保留。是否继续？",
+            "恢复官方动作",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+        if (confirmation != MessageBoxResult.Yes)
+        {
+            return;
+        }
+        try
+        {
+            var selectedType = (EventSelector.SelectedItem as TrainingEventOption)?.Type;
+            _eventOptions.Clear();
+            foreach (var option in _eventCatalog.RestoreMissingDefaults())
+            {
+                _eventOptions.Add(option);
+            }
+            EventSelector.SelectedItem = _eventOptions.FirstOrDefault(item => item.Type == selectedType)
+                ?? _eventOptions.FirstOrDefault();
+            CollectionStatusText.Text = "缺失的官方动作已经恢复，自定义动作保持不变";
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, exception.Message, "恢复动作失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private void EventSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (EventSelector.SelectedItem is TrainingEventOption marker)
@@ -310,6 +363,7 @@ public partial class TrainingWindow : Window
             DeleteEventOptionButton.IsEnabled = true;
         }
         UpdateCollectorBladeSettings();
+        UpdateCollectionStartEnabled();
     }
 
     private void BladeSettings_Changed(object sender, RoutedEventArgs e) => UpdateCollectorBladeSettings();
@@ -448,7 +502,7 @@ public partial class TrainingWindow : Window
     {
         var selectedEvent = EventSelector?.SelectedItem as TrainingEventOption;
         var mode = (BladeModeSelector?.SelectedItem as BladeMarkingModeOption)?.Mode ?? BladeMarkingMode.Immediate;
-        var countdownMs = ParseInt(BladeCountdownText?.Text, 1000);
+        var countdownMs = ParseInt(BladeCountdownText?.Text, 5000);
         var compensationMs = ParseInt(BladeCompensationText?.Text, 50);
         if (BladeCountdownPanel is not null)
         {
@@ -476,6 +530,47 @@ public partial class TrainingWindow : Window
                 StopCollection();
             }
         });
+    }
+
+    private void Collector_CountdownChanged(object? sender, BladeCountdownStatus status)
+    {
+        _ = Dispatcher.BeginInvoke(async () =>
+        {
+            if (status.IsCancelled)
+            {
+                _countdownWindow?.Close();
+                _countdownWindow = null;
+                return;
+            }
+            if (_countdownWindow is null)
+            {
+                _countdownWindow = new CollectionCountdownWindow { Owner = this };
+                _countdownWindow.Show();
+            }
+            _countdownWindow.UpdateStatus(status);
+            if (status.IsCompleted)
+            {
+                var completedWindow = _countdownWindow;
+                await Task.Delay(450);
+                if (ReferenceEquals(_countdownWindow, completedWindow))
+                {
+                    completedWindow.Close();
+                    _countdownWindow = null;
+                }
+            }
+        });
+    }
+
+    private void UpdateCollectionStartEnabled()
+    {
+        if (StartCollectionButton is null)
+        {
+            return;
+        }
+        StartCollectionButton.IsEnabled = !_collector.IsRunning &&
+            PortSelector?.SelectedItem is string &&
+            StateLabelSelector?.SelectedItem is TrainingLabelOption &&
+            EventSelector?.SelectedItem is TrainingEventOption;
     }
 
     private async void ConnectCloud_Click(object sender, RoutedEventArgs e)
@@ -994,7 +1089,9 @@ public partial class TrainingWindow : Window
         _firmwareCancellation?.Cancel();
         _firmwareCancellation?.Dispose();
         _collector.StatusChanged -= Collector_StatusChanged;
+        _collector.CountdownChanged -= Collector_CountdownChanged;
         _collector.Dispose();
+        _countdownWindow?.Close();
         ResumeTelemetry();
         _api?.Dispose();
         _tunnel?.Dispose();

@@ -77,102 +77,126 @@
 
         <TabControl x:Name="TrainingTabs" Grid.Row="2" Background="Transparent" BorderThickness="0" Foreground="#FFF1F5F9">
             <TabItem Header="  1. 采集与标注  ">
-                <Grid Margin="0,14,0,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="0.9*" />
-                        <ColumnDefinition Width="16" />
-                        <ColumnDefinition Width="1.1*" />
-                    </Grid.ColumnDefinitions>
-                    <Border Style="{StaticResource Card}">
-                        <StackPanel>
-                            <TextBlock FontSize="16" FontWeight="SemiBold" Text="采集会话" />
-                            <TextBlock Margin="0,7,0,17" Foreground="#FF8291A7" TextWrapping="Wrap"
-                                       Text="保持统一 Dongle 固件，长按 Dongle 按钮 2 秒至橙灯进入采集态。软件会读取原始六轴数据并生成训练 CSV。" />
-                            <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="Dongle 串口" />
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <ComboBox x:Name="PortSelector" />
-                                <Button Grid.Column="1" Margin="9,0,0,0" Content="刷新" Click="RefreshPorts_Click" />
-                            </Grid>
-                            <TextBlock Margin="0,15,0,6" Foreground="#FF93A3B8" Text="连续状态标签" />
-                            <ComboBox x:Name="StateLabelSelector" SelectionChanged="StateLabelSelector_SelectionChanged" />
-                            <TextBlock Margin="0,15,0,6" Foreground="#FF93A3B8" Text="采集保存位置" />
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <TextBox x:Name="CollectionRootText" IsReadOnly="True" />
-                                <Button Grid.Column="1" Margin="9,0,0,0" Content="选择" Click="ChooseCollectionRoot_Click" />
-                            </Grid>
-                            <StackPanel Margin="0,20,0,0" Orientation="Horizontal">
-                                <Button x:Name="StartCollectionButton" Style="{StaticResource Primary}" Content="开始采集" Click="StartCollection_Click" />
-                                <Button x:Name="StopCollectionButton" IsEnabled="False" Content="停止并保存" Click="StopCollection_Click" />
-                            </StackPanel>
+                <Border Margin="0,14,0,0" Style="{StaticResource Card}" Padding="18">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel MaxWidth="940" HorizontalAlignment="Center">
+                            <TextBlock FontSize="18" FontWeight="SemiBold" Text="一次采集的设置与标注" />
+                            <TextBlock Margin="0,7,0,16" Foreground="#FF8291A7" TextWrapping="Wrap"
+                                       Text="按顺序完成下面的选择，最后再开始采集。Dongle 需长按按钮 2 秒进入橙灯采集态。" />
+
+                            <Border Padding="16" Background="#FF0A111C" CornerRadius="12">
+                                <StackPanel>
+                                    <TextBlock FontSize="14" FontWeight="SemiBold" Text="1　连接 Dongle" />
+                                    <TextBlock Margin="0,10,0,6" Foreground="#FF93A3B8" Text="Dongle 串口" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                        <ComboBox x:Name="PortSelector" SelectionChanged="CollectionSelection_Changed" />
+                                        <Button Grid.Column="1" Margin="9,0,0,0" Content="刷新串口" Click="RefreshPorts_Click" />
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Margin="0,10,0,0" Padding="16" Background="#FF0A111C" CornerRadius="12">
+                                <StackPanel>
+                                    <TextBlock FontSize="14" FontWeight="SemiBold" Text="2　选择训练标签" />
+                                    <Grid Margin="0,10,0,0">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="16" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="连续状态标签" />
+                                            <ComboBox x:Name="StateLabelSelector" SelectionChanged="StateLabelSelector_SelectionChanged" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="本次单独动作标签" />
+                                            <ComboBox x:Name="EventSelector" SelectionChanged="EventSelector_SelectionChanged" />
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Margin="0,10,0,0" Padding="16" Background="#FF0A111C" CornerRadius="12">
+                                <StackPanel>
+                                    <TextBlock FontSize="14" FontWeight="SemiBold" Text="3　选择标记方式" />
+                                    <TextBlock Margin="0,10,0,6" Foreground="#FF93A3B8" Text="Blade 标记方式" />
+                                    <ComboBox x:Name="BladeModeSelector" SelectionChanged="BladeModeSelector_SelectionChanged" />
+                                    <StackPanel x:Name="BladeCountdownPanel" Margin="0,10,0,0" Visibility="Collapsed">
+                                        <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="倒计时（毫秒，默认 5000）" />
+                                        <TextBox x:Name="BladeCountdownText" Text="5000" LostFocus="BladeSettings_Changed" />
+                                        <TextBlock Margin="0,6,0,0" FontSize="10" Foreground="#FF8291A7"
+                                                   Text="归零时大字提醒开始动作，0.5 秒后写入动作标签。" />
+                                    </StackPanel>
+                                    <StackPanel x:Name="BladeCompensationPanel" Margin="0,10,0,0">
+                                        <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="即时延迟补偿（毫秒）" />
+                                        <TextBox x:Name="BladeCompensationText" Text="50" LostFocus="BladeSettings_Changed" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Margin="0,10,0,0" Padding="16" Background="#FF0A111C" CornerRadius="12">
+                                <StackPanel>
+                                    <TextBlock FontSize="14" FontWeight="SemiBold" Text="4　确认保存位置" />
+                                    <Grid Margin="0,10,0,0">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                        <TextBox x:Name="CollectionRootText" IsReadOnly="True" />
+                                        <Button Grid.Column="1" Margin="9,0,0,0" Content="选择位置" Click="ChooseCollectionRoot_Click" />
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Margin="0,12,0,0" Padding="16" Background="#172DD4BF" BorderBrush="#552DD4BF"
+                                    BorderThickness="1" CornerRadius="12">
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock FontSize="15" FontWeight="SemiBold" Text="5　开始采集" />
+                                        <TextBlock Margin="0,5,0,0" Foreground="#FF9BE7DB" TextWrapping="Wrap"
+                                                   Text="采集期间按一次 Blade 生成一个所选动作标签；电脑按钮可作备用触发。" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Button x:Name="StartCollectionButton" MinWidth="128" MinHeight="44" Style="{StaticResource Primary}"
+                                                IsEnabled="False" Content="开始采集" Click="StartCollection_Click" />
+                                        <Button x:Name="StopCollectionButton" MinHeight="44" IsEnabled="False"
+                                                Content="停止并保存" Click="StopCollection_Click" />
+                                        <Button MinHeight="44" Content="电脑按钮触发一次" Click="MarkSelectedEvent_Click" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
                             <Border Margin="0,10,0,0" Padding="13" Background="#FF0A111C" CornerRadius="10">
                                 <StackPanel>
-                                    <TextBlock x:Name="CollectionStatusText" Text="等待开始" TextWrapping="Wrap" />
+                                    <TextBlock x:Name="CollectionStatusText" Text="请按顺序完成采集设置" TextWrapping="Wrap" />
                                     <TextBlock x:Name="SampleCountText" Margin="0,7,0,0" FontFamily="Consolas"
                                                Foreground="#FF2DD4BF" Text="样本 0 · 节点 —" />
                                     <TextBlock x:Name="CollectionFilesText" Margin="0,7,0,0" FontSize="10"
                                                Foreground="#FF718096" Text="尚未生成文件" TextWrapping="Wrap" />
                                 </StackPanel>
                             </Border>
-                        </StackPanel>
-                    </Border>
 
-                    <Border Grid.Column="2" Style="{StaticResource Card}">
-                        <ScrollViewer VerticalScrollBarVisibility="Auto">
-                            <StackPanel>
-                                <TextBlock FontSize="16" FontWeight="SemiBold" Text="单人动作事件标记" />
-                                <TextBlock Margin="0,7,0,14" Foreground="#FF8291A7" TextWrapping="Wrap"
-                                           Text="先预选本次动作。采集时每按一次 Blade 只生成一个事件，也可以使用电脑按钮备用标记。" />
-
-                                <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="本次采集动作" />
-                                <ComboBox x:Name="EventSelector" SelectionChanged="EventSelector_SelectionChanged" />
-                                <TextBlock Margin="0,13,0,6" Foreground="#FF93A3B8" Text="Blade 标记方式" />
-                                <ComboBox x:Name="BladeModeSelector" SelectionChanged="BladeModeSelector_SelectionChanged" />
-                                <StackPanel x:Name="BladeCountdownPanel" Margin="0,12,0,0" Visibility="Collapsed">
-                                    <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="倒计时（毫秒）" />
-                                    <TextBox x:Name="BladeCountdownText" Text="1000" LostFocus="BladeSettings_Changed" />
-                                </StackPanel>
-                                <StackPanel x:Name="BladeCompensationPanel" Margin="0,12,0,0">
-                                    <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="即时延迟补偿（毫秒）" />
-                                    <TextBox x:Name="BladeCompensationText" Text="50" LostFocus="BladeSettings_Changed" />
-                                </StackPanel>
-                                <StackPanel Margin="0,14,0,0" Orientation="Horizontal">
-                                    <Button Style="{StaticResource Primary}" Content="立即标记所选动作" Click="MarkSelectedEvent_Click" />
-                                </StackPanel>
-
-                                <Border Margin="0,10,0,13" Height="1" Background="#FF263246" />
-                                <TextBlock FontSize="14" FontWeight="SemiBold" Text="编辑动作事件库" />
-                                <TextBlock Margin="0,7,0,8" Foreground="#FF8291A7" TextWrapping="Wrap"
-                                           Text="新建动作时只需填写显示名称，系统会自动生成内部编号。" />
-                                <Button HorizontalAlignment="Left" Content="＋ 新建动作" Click="NewEventOption_Click" />
-                                <TextBlock Margin="0,8,0,5" Foreground="#FF93A3B8" Text="显示名称" />
-                                <TextBox x:Name="EventDisplayNameText" />
-                                <TextBlock Margin="0,9,0,5" Foreground="#FF93A3B8" Text="系统动作编号（自动生成）" />
-                                <TextBox x:Name="EventTypeText" IsReadOnly="True" />
-                                <StackPanel Margin="0,13,0,0" Orientation="Horizontal">
-                                    <Button x:Name="SaveEventOptionButton" Style="{StaticResource Primary}"
-                                            Content="保存修改" Click="SaveEventOption_Click" />
-                                    <Button x:Name="DeleteEventOptionButton" Content="仅从动作列表移除"
-                                            ToolTip="不会删除已经采集的 CSV、云端数据或训练模型"
-                                            Click="DeleteEventOption_Click" />
-                                </StackPanel>
-
-                                <Border Margin="0,8,0,0" Padding="14" Background="#172DD4BF" BorderBrush="#552DD4BF"
-                                        BorderThickness="1" CornerRadius="10">
-                                    <TextBlock Foreground="#FF9BE7DB" TextWrapping="Wrap"
-                                               Text="倒计时方式最稳：按 Blade 后等待提示音再做动作，通信延迟不会进入动作标签。新动作训练进模型后，会自动出现在 Dongle Wi-Fi 按键配置页。" />
+                            <Expander Margin="0,12,0,0" Header="动作标签库管理（新增、修改、恢复）">
+                                <Border Margin="0,8,0,0" Padding="16" Background="#FF0A111C" CornerRadius="12">
+                                    <StackPanel>
+                                        <TextBlock Foreground="#FF8291A7" TextWrapping="Wrap"
+                                                   Text="删除动作只会影响本机选择列表，不会删除已经采集的 CSV。误删官方动作可直接恢复。" />
+                                        <StackPanel Margin="0,10,0,0" Orientation="Horizontal">
+                                            <Button Content="＋ 新建动作" Click="NewEventOption_Click" />
+                                            <Button Content="恢复缺失的官方动作" Click="RestoreDefaultEvents_Click" />
+                                        </StackPanel>
+                                        <TextBlock Margin="0,10,0,5" Foreground="#FF93A3B8" Text="显示名称" />
+                                        <TextBox x:Name="EventDisplayNameText" />
+                                        <TextBlock Margin="0,9,0,5" Foreground="#FF93A3B8" Text="系统动作编号（自动生成）" />
+                                        <TextBox x:Name="EventTypeText" IsReadOnly="True" />
+                                        <StackPanel Margin="0,13,0,0" Orientation="Horizontal">
+                                            <Button x:Name="SaveEventOptionButton" Style="{StaticResource Primary}"
+                                                    Content="保存修改" Click="SaveEventOption_Click" />
+                                            <Button x:Name="DeleteEventOptionButton" Content="仅从动作列表移除"
+                                                    ToolTip="不会删除已经采集的 CSV、云端数据或训练模型"
+                                                    Click="DeleteEventOption_Click" />
+                                        </StackPanel>
+                                    </StackPanel>
                                 </Border>
-                            </StackPanel>
-                        </ScrollViewer>
-                    </Border>
-                </Grid>
+                            </Expander>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Border>
             </TabItem>
 
             <TabItem Header="  2. 我的采集数据  ">

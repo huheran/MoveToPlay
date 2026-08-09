@@ -63,6 +63,7 @@ esp_err_t m2p_espnow_send_tracker_sample(uint8_t node_id,
 esp_err_t m2p_espnow_send_blade_state(uint8_t node_id,
                                        uint32_t sequence,
                                        bool pressed,
+                                       uint32_t button_edge_timestamp_us,
                                        bool battery_valid,
                                        uint8_t battery_percent,
                                        uint16_t battery_mv);

@@ -27,3 +27,10 @@ public sealed record BladeMarkingModeOption(BladeMarkingMode Mode, string Displa
 {
     public override string ToString() => DisplayName;
 }
+
+public sealed record BladeCountdownStatus(
+    string ActionDisplayName,
+    int RemainingMilliseconds,
+    bool IsGo,
+    bool IsCompleted,
+    bool IsCancelled = false);

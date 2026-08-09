@@ -15,6 +15,7 @@ public sealed class ImuCollectionService : IDisposable
     private SerialPort? _port;
     private StreamWriter? _samplesWriter;
     private StreamWriter? _eventsWriter;
+    private StreamWriter? _timingWriter;
     private string _stateLabel = "idle";
     private string _sessionId = "";
     private long _sampleCount;
@@ -22,17 +23,20 @@ public sealed class ImuCollectionService : IDisposable
     private int _eventCount;
     private TrainingEventOption? _selectedEvent;
     private BladeMarkingMode _bladeMarkingMode = BladeMarkingMode.Immediate;
-    private int _bladeCountdownMs = 1000;
+    private int _bladeCountdownMs = 5000;
     private int _bladeLatencyCompensationMs = 50;
     private bool _bladeCountdownPending;
-    private double? _dongleToPcOffsetMs;
     private readonly Dictionary<int, long> _lastNodeSeen = [];
 
     public event EventHandler<ImuCollectionStatus>? StatusChanged;
 
+    public event EventHandler<BladeCountdownStatus>? CountdownChanged;
+
     public string? SamplesPath { get; private set; }
 
     public string? EventsPath { get; private set; }
+
+    public string? TimingDiagnosticsPath { get; private set; }
 
     public bool IsRunning => _worker is { IsCompleted: false };
 
@@ -76,18 +80,21 @@ public sealed class ImuCollectionService : IDisposable
         Directory.CreateDirectory(sessionDirectory);
         SamplesPath = Path.Combine(sessionDirectory, "samples.csv");
         EventsPath = Path.Combine(sessionDirectory, "events.csv");
+        TimingDiagnosticsPath = Path.Combine(sessionDirectory, "timing_diagnostics.csv");
         _sampleCount = 0;
         _eventSequence = 0;
         _eventCount = 0;
         _bladeCountdownPending = false;
-        _dongleToPcOffsetMs = null;
         _lastNodeSeen.Clear();
         _samplesWriter = CreateWriter(SamplesPath);
         _eventsWriter = CreateWriter(EventsPath);
-        _samplesWriter.WriteLine("pc_timestamp_ms,board_timestamp_ms,dongle_timestamp_ms,node_id,ax,ay,az,gx,gy,gz,state_label,event_group,event_type,event_id,session_id");
-        _eventsWriter.WriteLine("event_id,event_group,event_type,pc_timestamp_ms,state_label,session_id,source,dongle_timestamp_ms,blade_sequence,latency_compensation_ms");
+        _timingWriter = CreateWriter(TimingDiagnosticsPath);
+        _samplesWriter.WriteLine("pc_timestamp_ms,board_timestamp_ms,node_id,ax,ay,az,gx,gy,gz,state_label,event_group,event_type,event_id,session_id");
+        _eventsWriter.WriteLine("event_id,event_group,event_type,pc_timestamp_ms,state_label,session_id");
+        _timingWriter.WriteLine("session_id,event_type,blade_edge_timestamp_us,dongle_receive_timestamp_ms,pc_receive_timestamp_ms,blade_sequence");
         _samplesWriter.Flush();
         _eventsWriter.Flush();
+        _timingWriter.Flush();
 
         _cancellation = new CancellationTokenSource();
         _worker = Task.Run(() => ReadLoop(portName, _cancellation.Token));
@@ -95,13 +102,18 @@ public sealed class ImuCollectionService : IDisposable
 
     public void MarkEvent(TrainingEventOption marker)
     {
-        RecordEvent(
-            marker,
-            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            "manual",
-            null,
-            null,
-            0);
+        BladeMarkingMode mode;
+        lock (_gate)
+        {
+            mode = _bladeMarkingMode;
+        }
+        if (mode == BladeMarkingMode.Countdown)
+        {
+            StartCountdownMarker(marker);
+            return;
+        }
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        RecordEvent(marker, now);
     }
 
     public void Stop()
@@ -127,10 +139,13 @@ public sealed class ImuCollectionService : IDisposable
         {
             _samplesWriter?.Flush();
             _eventsWriter?.Flush();
+            _timingWriter?.Flush();
             _samplesWriter?.Dispose();
             _eventsWriter?.Dispose();
+            _timingWriter?.Dispose();
             _samplesWriter = null;
             _eventsWriter = null;
+            _timingWriter = null;
         }
         _worker = null;
         _bladeCountdownPending = false;
@@ -204,15 +219,7 @@ public sealed class ImuCollectionService : IDisposable
         }
 
         var receiptTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        double? dongleTimestamp = null;
-        if (parts.Length >= 10 &&
-            double.TryParse(parts[9], NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedDongleTimestamp))
-        {
-            dongleTimestamp = parsedDongleTimestamp;
-        }
-        var now = dongleTimestamp.HasValue ?
-            MapDongleTimestamp(dongleTimestamp.Value, receiptTime) :
-            receiptTime;
+        var now = receiptTime;
         lock (_gate)
         {
             if (_samplesWriter is null)
@@ -222,7 +229,6 @@ public sealed class ImuCollectionService : IDisposable
             _samplesWriter.WriteLine(string.Join(',',
                 now.ToString(CultureInfo.InvariantCulture),
                 boardTimestamp.ToString("0.###", CultureInfo.InvariantCulture),
-                dongleTimestamp?.ToString("0.###", CultureInfo.InvariantCulture) ?? "",
                 nodeId.ToString(CultureInfo.InvariantCulture),
                 parts[2].Trim(), parts[3].Trim(), parts[4].Trim(),
                 parts[5].Trim(), parts[6].Trim(), parts[7].Trim(),
@@ -265,16 +271,19 @@ public sealed class ImuCollectionService : IDisposable
         }
 
         var receiptTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var alignedTime = MapDongleTimestamp(dongleTimestamp, receiptTime);
+        uint? bladeEdgeTimestampUs = null;
+        if (parts.Length >= 5 &&
+            uint.TryParse(parts[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedBladeEdge))
+        {
+            bladeEdgeTimestampUs = parsedBladeEdge;
+        }
         TrainingEventOption? selected;
         BladeMarkingMode mode;
-        int countdownMs;
         int compensationMs;
         lock (_gate)
         {
             selected = _selectedEvent;
             mode = _bladeMarkingMode;
-            countdownMs = _bladeCountdownMs;
             compensationMs = _bladeLatencyCompensationMs;
         }
 
@@ -284,33 +293,38 @@ public sealed class ImuCollectionService : IDisposable
             return true;
         }
 
+        WriteTimingDiagnostic(selected, bladeEdgeTimestampUs, dongleTimestamp, receiptTime, bladeSequence);
+
         if (mode == BladeMarkingMode.Immediate)
         {
-            RecordEvent(
-                selected,
-                alignedTime - compensationMs,
-                "blade_immediate",
-                dongleTimestamp,
-                bladeSequence,
-                compensationMs);
-            Publish(true, $"Blade 已标记：{selected.DisplayName}");
+            RecordEvent(selected, receiptTime - compensationMs);
+            Publish(true,
+                $"Blade 已标记：{selected.DisplayName}；物理边沿 {bladeEdgeTimestampUs?.ToString() ?? "旧固件未提供"} µs，" +
+                $"Dongle 收包 {dongleTimestamp:0.###} ms，电脑收包 {receiptTime} ms");
             return true;
         }
 
+        StartCountdownMarker(selected);
+        return true;
+    }
+
+    private void StartCountdownMarker(TrainingEventOption selected)
+    {
         CancellationToken cancellationToken;
+        int countdownMs;
         lock (_gate)
         {
             if (_bladeCountdownPending)
             {
                 Publish(true, "倒计时尚未结束，本次 Blade 单击已忽略");
-                return true;
+                return;
             }
             _bladeCountdownPending = true;
+            countdownMs = _bladeCountdownMs;
             cancellationToken = _cancellation?.Token ?? CancellationToken.None;
         }
-        Publish(true, $"{selected.DisplayName}：{countdownMs / 1000.0:0.0} 秒后听提示开始动作");
+        Publish(true, $"{selected.DisplayName}：{countdownMs / 1000.0:0.0} 秒后开始动作");
         _ = RunCountdownMarkerAsync(selected, countdownMs, cancellationToken);
-        return true;
     }
 
     private async Task RunCountdownMarkerAsync(
@@ -320,20 +334,39 @@ public sealed class ImuCollectionService : IDisposable
     {
         try
         {
-            await Task.Delay(countdownMs, cancellationToken);
+            var startedAt = Environment.TickCount64;
+            var previousSecond = -1;
+            while (true)
+            {
+                var elapsed = (int)Math.Min(int.MaxValue, Environment.TickCount64 - startedAt);
+                var remaining = Math.Max(0, countdownMs - elapsed);
+                var second = (int)Math.Ceiling(remaining / 1000.0);
+                if (second != previousSecond)
+                {
+                    previousSecond = second;
+                    CountdownChanged?.Invoke(this,
+                        new BladeCountdownStatus(marker.DisplayName, remaining, IsGo: false, IsCompleted: false));
+                }
+                if (remaining <= 0)
+                {
+                    break;
+                }
+                await Task.Delay(Math.Min(50, remaining), cancellationToken);
+            }
             SystemSounds.Asterisk.Play();
-            RecordEvent(
-                marker,
-                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                "blade_countdown",
-                null,
-                null,
-                0);
-            Publish(true, $"提示音已响并标记：{marker.DisplayName}");
+            CountdownChanged?.Invoke(this,
+                new BladeCountdownStatus(marker.DisplayName, 0, IsGo: true, IsCompleted: false));
+            await Task.Delay(500, cancellationToken);
+            var markerTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            RecordEvent(marker, markerTime);
+            CountdownChanged?.Invoke(this,
+                new BladeCountdownStatus(marker.DisplayName, 0, IsGo: false, IsCompleted: true));
+            Publish(true, $"倒计时归零后 0.5 秒已标记：{marker.DisplayName}");
         }
         catch (OperationCanceledException)
         {
-            // Stopping collection cancels a pending countdown.
+            CountdownChanged?.Invoke(this,
+                new BladeCountdownStatus(marker.DisplayName, 0, IsGo: false, IsCompleted: false, IsCancelled: true));
         }
         catch (InvalidOperationException)
         {
@@ -348,26 +381,7 @@ public sealed class ImuCollectionService : IDisposable
         }
     }
 
-    private long MapDongleTimestamp(double dongleTimestampMs, long receiptTimeMs)
-    {
-        lock (_gate)
-        {
-            var candidateOffset = receiptTimeMs - dongleTimestampMs;
-            if (!_dongleToPcOffsetMs.HasValue || candidateOffset < _dongleToPcOffsetMs.Value)
-            {
-                _dongleToPcOffsetMs = candidateOffset;
-            }
-            return (long)Math.Round(dongleTimestampMs + _dongleToPcOffsetMs.Value);
-        }
-    }
-
-    private void RecordEvent(
-        TrainingEventOption marker,
-        long timestampMs,
-        string source,
-        double? dongleTimestampMs,
-        uint? bladeSequence,
-        int latencyCompensationMs)
+    private void RecordEvent(TrainingEventOption marker, long timestampMs)
     {
         lock (_gate)
         {
@@ -381,11 +395,31 @@ public sealed class ImuCollectionService : IDisposable
             _eventsWriter.WriteLine(string.Join(',',
                 Csv(eventId), Csv(marker.Group), Csv(marker.Type),
                 timestampMs.ToString(CultureInfo.InvariantCulture),
-                Csv(Volatile.Read(ref _stateLabel)), Csv(_sessionId), Csv(source),
-                dongleTimestampMs?.ToString("0.###", CultureInfo.InvariantCulture) ?? "",
-                bladeSequence?.ToString(CultureInfo.InvariantCulture) ?? "",
-                latencyCompensationMs.ToString(CultureInfo.InvariantCulture)));
+                Csv(Volatile.Read(ref _stateLabel)), Csv(_sessionId)));
             _eventsWriter.Flush();
+        }
+    }
+
+    private void WriteTimingDiagnostic(
+        TrainingEventOption marker,
+        uint? bladeEdgeTimestampUs,
+        double dongleReceiveTimestampMs,
+        long pcReceiveTimestampMs,
+        uint bladeSequence)
+    {
+        lock (_gate)
+        {
+            if (_timingWriter is null)
+            {
+                return;
+            }
+            _timingWriter.WriteLine(string.Join(',',
+                Csv(_sessionId), Csv(marker.Type),
+                bladeEdgeTimestampUs?.ToString(CultureInfo.InvariantCulture) ?? "",
+                dongleReceiveTimestampMs.ToString("0.###", CultureInfo.InvariantCulture),
+                pcReceiveTimestampMs.ToString(CultureInfo.InvariantCulture),
+                bladeSequence.ToString(CultureInfo.InvariantCulture)));
+            _timingWriter.Flush();
         }
     }
 

@@ -435,6 +435,7 @@ typedef enum {
 
 typedef struct {
     int64_t dongle_timestamp_us;
+    uint32_t blade_edge_timestamp_us;
     uint32_t blade_sequence;
 } dongle_blade_marker_t;
 
@@ -814,7 +815,9 @@ static void dongle_send_latest_node_csv(dongle_latest_node_t *node, int64_t now_
     }
 }
 
-static void dongle_queue_blade_marker(int64_t dongle_timestamp_us, uint32_t blade_sequence)
+static void dongle_queue_blade_marker(int64_t dongle_timestamp_us,
+                                      uint32_t blade_edge_timestamp_us,
+                                      uint32_t blade_sequence)
 {
     if (s_dongle_blade_marker_count >= DONGLE_BLADE_MARKER_QUEUE_SIZE) {
         ESP_LOGW(TAG, "Blade marker queue full; dropping sequence=%" PRIu32, blade_sequence);
@@ -826,6 +829,7 @@ static void dongle_queue_blade_marker(int64_t dongle_timestamp_us, uint32_t blad
                                    DONGLE_BLADE_MARKER_QUEUE_SIZE);
     s_dongle_blade_markers[tail] = (dongle_blade_marker_t) {
         .dongle_timestamp_us = dongle_timestamp_us,
+        .blade_edge_timestamp_us = blade_edge_timestamp_us,
         .blade_sequence = blade_sequence,
     };
     s_dongle_blade_marker_count++;
@@ -836,12 +840,13 @@ static void dongle_send_pending_blade_markers(void)
     while (s_dongle_blade_marker_count > 0 && usb_telemetry_is_ready()) {
         const dongle_blade_marker_t *marker =
             &s_dongle_blade_markers[s_dongle_blade_marker_head];
-        char line[112];
+        char line[144];
         const int written = snprintf(line,
                                      sizeof(line),
-                                     "#M2P_EVENT,blade_click,%" PRIi64 ",%" PRIu32 "\n",
+                                     "#M2P_EVENT,blade_click,%" PRIi64 ",%" PRIu32 ",%" PRIu32 "\n",
                                      marker->dongle_timestamp_us / 1000LL,
-                                     marker->blade_sequence);
+                                     marker->blade_sequence,
+                                     marker->blade_edge_timestamp_us);
         if (written <= 0 || written >= (int)sizeof(line) ||
             usb_telemetry_write_line(line) != ESP_OK) {
             return;
@@ -3676,6 +3681,7 @@ static void espnow_rx_task(void *arg)
                     } else if (s_dongle_collect_blade_armed) {
                         s_dongle_collect_blade_armed = false;
                         dongle_queue_blade_marker(esp_timer_get_time(),
+                                                  rx_packet.packet.timestamp_us,
                                                   rx_packet.packet.sequence);
                     }
                 }
@@ -3817,6 +3823,29 @@ static esp_err_t blade_button_init(void)
     };
 
     return gpio_config(&io_conf);
+}
+
+static volatile uint32_t s_blade_pending_press_edge_us = 0;
+
+static void IRAM_ATTR blade_button_edge_isr(void *arg)
+{
+    (void)arg;
+    if (gpio_get_level(BLADE_BUTTON_GPIO) == 0 && s_blade_pending_press_edge_us == 0) {
+        s_blade_pending_press_edge_us = (uint32_t)esp_timer_get_time();
+    }
+}
+
+static esp_err_t blade_button_edge_capture_init(void)
+{
+    esp_err_t err = gpio_set_intr_type(BLADE_BUTTON_GPIO, GPIO_INTR_ANYEDGE);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = gpio_install_isr_service(0);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        return err;
+    }
+    return gpio_isr_handler_add(BLADE_BUTTON_GPIO, blade_button_edge_isr, NULL);
 }
 
 static bool blade_button_is_pressed(void)
@@ -4043,6 +4072,7 @@ static void blade_report_task(void *arg)
     uint8_t report_burst_remaining = BLADE_STATE_CHANGE_BURST_COUNT;
     bool last_raw_pressed = blade_button_is_pressed();
     bool stable_pressed = last_raw_pressed;
+    uint32_t stable_edge_timestamp_us = (uint32_t)esp_timer_get_time();
     uint8_t same_sample_count = BLADE_DEBOUNCE_SAMPLES;
     blade_sleep_gesture_state_t sleep_gesture_state = BLADE_SLEEP_GESTURE_IDLE;
     uint8_t sleep_short_press_count = 0;
@@ -4074,10 +4104,20 @@ static void blade_report_task(void *arg)
         if (same_sample_count >= BLADE_DEBOUNCE_SAMPLES &&
             stable_pressed != last_raw_pressed) {
             stable_pressed = last_raw_pressed;
+            if (stable_pressed) {
+                const uint32_t captured_edge = s_blade_pending_press_edge_us;
+                stable_edge_timestamp_us = (captured_edge != 0) ?
+                    captured_edge : (uint32_t)esp_timer_get_time();
+                s_blade_pending_press_edge_us = 0;
+            }
             state_changed = true;
             led_set(stable_pressed);
             ESP_LOGI(TAG, "blade button state: %s",
                      stable_pressed ? "pressed" : "released");
+        }
+
+        if (!raw_pressed && !stable_pressed && same_sample_count >= BLADE_DEBOUNCE_SAMPLES) {
+            s_blade_pending_press_edge_us = 0;
         }
 
         if (state_changed) {
@@ -4163,6 +4203,8 @@ static void blade_report_task(void *arg)
             send_err = m2p_espnow_send_blade_state(BLADE_NODE_ID,
                                                    sequence,
                                                    stable_pressed,
+                                                   stable_pressed ? stable_edge_timestamp_us :
+                                                       (uint32_t)esp_timer_get_time(),
                                                    s_local_battery_valid,
                                                    s_local_battery_percent,
                                                    s_local_battery_mv);
@@ -4388,6 +4430,12 @@ static void start_blade_mode(void)
     }
 
     blade_confirm_wake_hold_or_sleep();
+
+    esp_err_t edge_capture_err = blade_button_edge_capture_init();
+    if (edge_capture_err != ESP_OK) {
+        ESP_LOGW(TAG, "Blade precise edge capture unavailable: %s",
+                 esp_err_to_name(edge_capture_err));
+    }
 
 #if MOVE_TO_PLAY_ENABLE_ESPNOW
     esp_err_t espnow_err = m2p_espnow_init(M2P_ESPNOW_ROLE_BLADE, M2P_ESPNOW_CHANNEL);
