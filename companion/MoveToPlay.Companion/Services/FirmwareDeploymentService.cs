@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -46,7 +47,7 @@ public sealed partial class FirmwareDeploymentService
         }
         Directory.CreateDirectory(workspace);
 
-        progress?.Report(new FirmwareDeploymentProgress("准备源码", "正在建立隔离的 Dongle 固件工作区"));
+        progress?.Report(new FirmwareDeploymentProgress("准备源码", "正在建立隔离的 Dongle 固件工作区", 5));
         CopyProjectFile(projectRoot, workspace, "CMakeLists.txt");
         CopyProjectFile(projectRoot, workspace, "dependencies.lock");
         CopyProjectFile(projectRoot, workspace, "partitions.csv");
@@ -74,7 +75,7 @@ public sealed partial class FirmwareDeploymentService
         var activationScript = FindIdfActivationScript(idfPath);
 
         var buildPath = Path.Combine(workspace, "build-dongle");
-        progress?.Report(new FirmwareDeploymentProgress("编译固件", "正在把云端模型 C 数组编译进 Dongle 固件，首次可能需要数分钟"));
+        progress?.Report(new FirmwareDeploymentProgress("编译固件", "正在把云端模型 C 数组编译进 Dongle 固件，首次可能需要数分钟", 12));
         await RunIdfAsync(
             idfPath,
             activationScript,
@@ -89,6 +90,9 @@ public sealed partial class FirmwareDeploymentService
             ],
             workspace,
             progress,
+            "编译固件",
+            12,
+            94,
             cancellationToken);
 
         var appBinary = Path.Combine(buildPath, "esp_idf_template.bin");
@@ -120,7 +124,7 @@ public sealed partial class FirmwareDeploymentService
             manifestPath,
             JsonSerializer.Serialize(manifest, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }),
             cancellationToken);
-        progress?.Report(new FirmwareDeploymentProgress("固件就绪", $"Dongle 应用固件 {new FileInfo(appBinary).Length / 1024d / 1024d:0.00} MiB"));
+        progress?.Report(new FirmwareDeploymentProgress("固件就绪", $"Dongle 应用固件 {new FileInfo(appBinary).Length / 1024d / 1024d:0.00} MiB", 100));
         return new FirmwareBuildPackage(
             jobId,
             workspace,
@@ -147,15 +151,18 @@ public sealed partial class FirmwareDeploymentService
         var projectRoot = FindProjectRoot();
         var idfPath = FindIdfPath(projectRoot);
         var activationScript = FindIdfActivationScript(idfPath);
-        progress?.Report(new FirmwareDeploymentProgress("烧录 Dongle", $"正在通过 {portName} 写入已批准模型，请勿拔线"));
+        progress?.Report(new FirmwareDeploymentProgress("烧录 Dongle", $"正在通过 {portName} 写入已批准模型，请勿拔线", 3));
         await RunIdfAsync(
             idfPath,
             activationScript,
             ["-B", package.BuildPath, "-p", portName, "flash"],
             package.WorkspacePath,
             progress,
+            "烧录 Dongle",
+            3,
+            98,
             cancellationToken);
-        progress?.Report(new FirmwareDeploymentProgress("烧录完成", "请长按 Dongle 按钮或重新上电回到绿色 Play 模式"));
+        progress?.Report(new FirmwareDeploymentProgress("烧录完成", "请长按 Dongle 按钮或重新上电回到绿色 Play 模式", 100));
     }
 
     private static async Task<object> FirmwareFileAsync(
@@ -183,6 +190,9 @@ public sealed partial class FirmwareDeploymentService
         IReadOnlyList<string> arguments,
         string workingDirectory,
         IProgress<FirmwareDeploymentProgress>? progress,
+        string toolStage,
+        double progressStart,
+        double progressEnd,
         CancellationToken cancellationToken)
     {
         var usePowerShell = !string.IsNullOrWhiteSpace(activationScript);
@@ -251,7 +261,8 @@ public sealed partial class FirmwareDeploymentService
             {
                 tail.Dequeue();
             }
-            progress?.Report(new FirmwareDeploymentProgress("执行工具", line));
+            var percent = ParseToolProgress(line, progressStart, progressEnd);
+            progress?.Report(new FirmwareDeploymentProgress(toolStage, line, percent, percent <= progressStart));
         }
         process.OutputDataReceived += (_, eventArgs) => Capture(eventArgs.Data);
         process.ErrorDataReceived += (_, eventArgs) => Capture(eventArgs.Data);
@@ -282,6 +293,24 @@ public sealed partial class FirmwareDeploymentService
             throw new InvalidOperationException(
                 $"ESP-IDF 工具执行失败（退出码 {process.ExitCode}）。\n{string.Join(Environment.NewLine, tail)}");
         }
+    }
+
+    private static double ParseToolProgress(string line, double start, double end)
+    {
+        var ninja = NinjaProgressRegex().Match(line);
+        if (ninja.Success &&
+            double.TryParse(ninja.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var current) &&
+            double.TryParse(ninja.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var total) && total > 0)
+        {
+            return start + (end - start) * Math.Clamp(current / total, 0, 1);
+        }
+        var flash = FlashProgressRegex().Match(line);
+        if (flash.Success && double.TryParse(
+                flash.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var written))
+        {
+            return start + (end - start) * Math.Clamp(written / 100.0, 0, 1);
+        }
+        return start;
     }
 
     private static string CmdQuote(string value) => $"\"{value.Replace("\"", "\"\"")}\"";
@@ -407,6 +436,12 @@ public sealed partial class FirmwareDeploymentService
 
     [GeneratedRegex(@"^#define\s+M2P_BOARD_PROFILE\s+\d+\s*$", RegexOptions.Multiline | RegexOptions.CultureInvariant)]
     private static partial Regex BoardProfileRegex();
+
+    [GeneratedRegex(@"\[(\d+)\s*/\s*(\d+)\]")]
+    private static partial Regex NinjaProgressRegex();
+
+    [GeneratedRegex(@"\(\s*(\d+(?:\.\d+)?)\s*%\s*\)")]
+    private static partial Regex FlashProgressRegex();
 
     [GeneratedRegex(@"^COM\d+$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex PortRegex();

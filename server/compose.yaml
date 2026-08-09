@@ -24,6 +24,8 @@ services:
     image: movetoplay-training-worker:local
     container_name: movetoplay-training-worker
     restart: unless-stopped
+    env_file:
+      - ${MOVETOPLAY_ENV_FILE:-/home/movetoplay/MoveToPlay/shared/server.env}
     environment:
       MOVETOPLAY_STORAGE_ROOT: /srv/movetoplay
       MOVETOPLAY_SOURCE_COMMIT: ${MOVETOPLAY_SOURCE_COMMIT:-unknown}

@@ -365,6 +365,15 @@
                             <Border Grid.Row="1" Margin="0,15,0,12" Padding="13" Background="#FF0A111C" CornerRadius="10">
                                 <StackPanel>
                                     <TextBlock x:Name="JobStatusText" FontSize="15" FontWeight="SemiBold" Text="等待训练任务" />
+                                    <TextBlock x:Name="TrainingStageText" Margin="0,7,0,0" Foreground="#FF2DD4BF"
+                                               Text="尚未开始" TextWrapping="Wrap" />
+                                    <ProgressBar x:Name="TrainingProgress" Margin="0,9,0,0" Height="9"
+                                                 Minimum="0" Maximum="100" Value="0" />
+                                    <Grid Margin="0,7,0,0">
+                                        <TextBlock x:Name="TrainingProgressText" Foreground="#FF93A3B8" Text="0%" />
+                                        <TextBlock x:Name="TrainingTimeText" HorizontalAlignment="Right"
+                                                   Foreground="#FF93A3B8" Text="已用 00:00 · 剩余 —" />
+                                    </Grid>
                                     <TextBlock x:Name="MetricsText" Margin="0,8,0,0" Foreground="#FFB5C2D4"
                                                Text="完成后显示 State RF / Event RF 准确率与质量门禁" TextWrapping="Wrap" />
                                 </StackPanel>
@@ -398,10 +407,145 @@
                                     </StackPanel>
                                     <TextBlock x:Name="FirmwareStatusText" Margin="0,5,0,0" FontSize="10"
                                                Foreground="#FF9BE7DB" Text="等待已批准模型" TextWrapping="Wrap" />
+                                    <ProgressBar x:Name="FirmwareProgress" Margin="0,8,0,0" Height="7"
+                                                 Minimum="0" Maximum="100" Value="0" />
                                 </StackPanel>
                             </Border>
                         </Grid>
                     </Border>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="  4. 模型版本库  ">
+                <Grid Margin="0,14,0,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="12" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Border Style="{StaticResource Card}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock FontSize="18" FontWeight="SemiBold" Text="模型版本库与历史任务" />
+                                <TextBlock Margin="0,6,0,0" Foreground="#FF8291A7" TextWrapping="Wrap"
+                                           Text="已批准模型永久保留并可重新生成固件；未批准旧任务按服务器清理规则自动整理。" />
+                            </StackPanel>
+                            <Button Grid.Column="1" x:Name="RefreshHistoryButton" VerticalAlignment="Center"
+                                    Style="{StaticResource Primary}" Content="刷新云端列表" Click="RefreshHistory_Click" />
+                        </Grid>
+                    </Border>
+
+                    <Grid Grid.Row="2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="1.05*" />
+                            <ColumnDefinition Width="14" />
+                            <ColumnDefinition Width="0.95*" />
+                        </Grid.ColumnDefinitions>
+
+                        <Border Style="{StaticResource Card}" Padding="14">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <StackPanel>
+                                    <TextBlock FontSize="16" FontWeight="SemiBold" Text="历史训练任务" />
+                                    <TextBlock x:Name="HistoryStatusText" Margin="0,5,0,10" Foreground="#FF8291A7"
+                                               Text="连接服务器后显示全部任务" />
+                                </StackPanel>
+                                <ListBox x:Name="JobHistoryList" Grid.Row="1" Background="Transparent" BorderThickness="0"
+                                         SelectionChanged="JobHistoryList_SelectionChanged">
+                                    <ListBox.ItemContainerStyle>
+                                        <Style TargetType="ListBoxItem">
+                                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                            <Setter Property="Margin" Value="0,0,0,7" />
+                                            <Setter Property="Padding" Value="0" />
+                                        </Style>
+                                    </ListBox.ItemContainerStyle>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Padding="11" Background="#FF0A111C" BorderBrush="#FF263246" BorderThickness="1" CornerRadius="9">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                    <StackPanel>
+                                                        <TextBlock FontWeight="SemiBold" Text="{Binding CreatedDisplay}" />
+                                                        <TextBlock Margin="0,4,0,0" FontSize="10" FontFamily="Consolas" Foreground="#FF718096" Text="{Binding Id}" />
+                                                        <TextBlock Margin="0,5,0,0" Foreground="#FF9BE7DB" Text="{Binding ProgressDisplay}" TextWrapping="Wrap" />
+                                                    </StackPanel>
+                                                    <TextBlock Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Top"
+                                                               Foreground="#FFB5C2D4" Text="{Binding StatusDisplay}" />
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <Button Grid.Row="2" x:Name="LoadHistoryJobButton" IsEnabled="False"
+                                        Content="加载所选任务详情" Click="LoadSelectedHistoryJob_Click" />
+                            </Grid>
+                        </Border>
+
+                        <Border Grid.Column="2" Style="{StaticResource Card}" Padding="14">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <StackPanel>
+                                    <TextBlock FontSize="16" FontWeight="SemiBold" Text="已批准模型版本" />
+                                    <TextBlock Margin="0,5,0,10" Foreground="#FF8291A7"
+                                               Text="选择任意历史版本，可重新生成固件或烧录回滚。" />
+                                </StackPanel>
+                                <ListBox x:Name="ModelVersionList" Grid.Row="1" Background="Transparent" BorderThickness="0"
+                                         SelectionChanged="ModelVersionList_SelectionChanged">
+                                    <ListBox.ItemContainerStyle>
+                                        <Style TargetType="ListBoxItem">
+                                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                            <Setter Property="Margin" Value="0,0,0,7" />
+                                            <Setter Property="Padding" Value="0" />
+                                        </Style>
+                                    </ListBox.ItemContainerStyle>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Padding="11" Background="#FF0A111C" BorderBrush="#FF263246" BorderThickness="1" CornerRadius="9">
+                                                <StackPanel>
+                                                    <Grid>
+                                                        <TextBlock FontWeight="SemiBold" Foreground="#FF2DD4BF" Text="{Binding VersionDisplay}" />
+                                                        <TextBlock HorizontalAlignment="Right" Foreground="#FFFFC857" Text="{Binding ActiveDisplay}" />
+                                                    </Grid>
+                                                    <TextBlock Margin="0,5,0,0" Text="{Binding CreatedDisplay}" />
+                                                    <TextBlock Margin="0,4,0,0" FontSize="10" Foreground="#FF93A3B8" Text="{Binding BackupDisplay}" />
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <StackPanel Grid.Row="2" Margin="0,10,0,0">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                        <ComboBox x:Name="RollbackPortSelector" SelectionChanged="RollbackPortSelector_SelectionChanged" />
+                                        <Button Grid.Column="1" Margin="8,0,0,0" Content="刷新串口" Click="RefreshRollbackPorts_Click" />
+                                    </Grid>
+                                    <WrapPanel Margin="0,9,0,0">
+                                        <Button x:Name="LoadModelVersionButton" IsEnabled="False"
+                                                Content="选择此模型" Click="LoadSelectedModel_Click" />
+                                        <Button x:Name="RebuildModelFirmwareButton" IsEnabled="False"
+                                                Content="重新生成固件" Click="RebuildSelectedModel_Click" />
+                                        <Button x:Name="RollbackModelButton" IsEnabled="False" Style="{StaticResource Primary}"
+                                                Content="一键回滚并烧录" Click="RollbackSelectedModel_Click" />
+                                    </WrapPanel>
+                                    <ProgressBar x:Name="RollbackProgress" Margin="0,5,0,0" Height="7" Minimum="0" Maximum="100" />
+                                    <TextBlock x:Name="RollbackStatusText" Margin="0,6,0,0" FontSize="10"
+                                               Foreground="#FF9BE7DB" Text="请选择历史模型和蓝灯 Dongle 串口" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </Grid>
                 </Grid>
             </TabItem>
         </TabControl>

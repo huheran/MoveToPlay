@@ -48,6 +48,12 @@ Authorization: Bearer <token>
 - `GET /api/v1/jobs/{id}/artifacts`：列出运行产物。
 - `GET /api/v1/jobs/{id}/artifacts/{path}`：下载单个产物。
 - `POST /api/v1/jobs/{id}/approve`：人工批准状态为 `passed` 的训练任务。
+- `GET /api/v1/models`：列出全部已批准模型版本及当前采用、OSS 备份状态。
+- `POST /api/v1/models/{id}/activate`：把已批准历史版本设为当前采用模型。
+
+任务响应同时返回 `progress_stage`、`progress_detail`、`progress_percent`、
+`elapsed_seconds` 和 `estimated_remaining_seconds`。训练未结束前客户端不展示旧模型指标；
+完成后再读取 `run_manifest.json` 显示准确率与质量门禁。
 
 任务状态变化：
 
@@ -75,6 +81,18 @@ queued -> running -> validated   （仅校验）
 ```
 
 `approved` 记录人工决策。Companion 只允许对 `passed` 且存在 `approved_at` 的任务下载已校验 C 数组、生成 Dongle 固件，并在用户再次确认串口后烧录设备。
+批准时服务器分配不可变的 `model_version`，将它设为当前版本，并在配置 OSS 后异步归档完整运行目录。
+
+## 旧任务清理规则
+
+- 已批准模型：本地永久保留，并自动备份到 OSS；不会被清理任务删除。
+- 失败任务：默认保留 7 天。
+- 仅校验任务：默认保留 14 天。
+- 通过但未批准任务：默认保留 30 天。
+- 排队中和运行中任务：永不清理。
+
+保留天数均可通过 `MOVETOPLAY_CLEANUP_*_DAYS` 调整；可先运行
+`python -m app.maintenance --dry-run` 预览清理范围。
 
 ## 持久目录
 

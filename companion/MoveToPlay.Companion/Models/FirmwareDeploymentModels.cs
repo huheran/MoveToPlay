@@ -8,4 +8,8 @@ public sealed record FirmwareBuildPackage(
     string ManifestPath,
     long AppBytes);
 
-public sealed record FirmwareDeploymentProgress(string Stage, string Detail);
+public sealed record FirmwareDeploymentProgress(
+    string Stage,
+    string Detail,
+    double Percent = 0,
+    bool IsIndeterminate = false);

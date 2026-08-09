@@ -20,10 +20,54 @@ import pandas as pd
 
 from .config import Settings
 from .database import Database
+from .maintenance import cleanup_old_jobs
 from .storage import EVENT_COLUMNS, SAMPLE_COLUMNS, dataset_file, sha256_file
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _progress_from_line(line: str, current_model: str | None) -> tuple[str, str | None, float] | None:
+    text = line.strip()
+    if "[pipeline] validating dataset=" in text:
+        return "validating", None, 12
+    if "[pipeline] dataset valid:" in text:
+        return "validated", None, 18
+    if "[pipeline] training model=state" in text:
+        return "training_state", "state", 22
+    if "[pipeline] training model=event" in text:
+        return "training_event", "event", 52
+    if "[info] source events=" in text:
+        return ("training_state", current_model, 26) if current_model == "state" else ("training_event", current_model, 56)
+    if "[info] windows total=" in text:
+        return ("training_state", current_model, 36) if current_model == "state" else ("training_event", current_model, 70)
+    if text == "=== Metrics ===":
+        return ("evaluating_state", current_model, 42) if current_model == "state" else ("evaluating_event", current_model, 78)
+    if "[info] model saved:" in text:
+        return ("exporting_state", current_model, 44) if current_model == "state" else ("exporting_event", current_model, 83)
+    if "[pipeline] model=state" in text and "quality=PASS" in text:
+        return "state_complete", current_model, 48
+    if "[pipeline] model=event" in text and "quality=PASS" in text:
+        return "quality_gate", current_model, 90
+    if "[pipeline] complete:" in text:
+        return "finalizing", current_model, 98
+    return None
+
+
+def _progress_detail(stage: str) -> str:
+    return {
+        "validating": "正在校验合并数据集和 CSV 完整性",
+        "validated": "数据校验完成，正在构建训练窗口",
+        "training_state": "正在训练连续状态随机森林",
+        "evaluating_state": "正在评估状态模型准确率",
+        "exporting_state": "正在导出状态模型 C 数组",
+        "state_complete": "状态模型已通过质量门禁",
+        "training_event": "正在训练动作事件随机森林",
+        "evaluating_event": "正在评估动作事件模型",
+        "exporting_event": "正在导出动作模型 C 数组",
+        "quality_gate": "两个模型已训练完成，正在执行质量门禁",
+        "finalizing": "正在生成清单并校验全部产物",
+    }.get(stage, "云端正在训练模型")
 
 
 def counter_dict(counter: Counter[str]) -> dict[str, int]:
@@ -170,6 +214,10 @@ def run_one(settings: Settings, database: Database) -> bool:
     log_path = job_root / "pipeline.log"
     run_dir = settings.storage_root / "artifacts" / "training-runs" / job["id"]
     try:
+        database.update_job_progress(
+            job["id"], "preparing", "正在合并官方数据与玩家所选数据", 5,
+            settings.training_estimate_seconds,
+        )
         dataset = database.get_dataset(job["dataset_id"])
         if dataset is None or dataset["status"] != "ready":
             raise RuntimeError("dataset is missing or no longer ready")
@@ -189,7 +237,7 @@ def run_one(settings: Settings, database: Database) -> bool:
         environment = os.environ.copy()
         environment.setdefault("PYTHONHASHSEED", "0")
         with log_path.open("w", encoding="utf-8", newline="\n") as log:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 command,
                 cwd=PROJECT_ROOT,
                 env=environment,
@@ -197,10 +245,37 @@ def run_one(settings: Settings, database: Database) -> bool:
                 stderr=subprocess.STDOUT,
                 text=True,
                 encoding="utf-8",
-                check=False,
             )
-        if completed.returncode != 0:
-            error = f"pipeline exited with code {completed.returncode}"
+            current_model: str | None = None
+            log.flush()
+            with log_path.open("r", encoding="utf-8") as reader:
+                while process.poll() is None:
+                    line = reader.readline()
+                    if not line:
+                        time.sleep(0.25)
+                        continue
+                    parsed = _progress_from_line(line, current_model)
+                    if parsed is not None:
+                        stage, model_hint, percent = parsed
+                        if model_hint is not None:
+                            current_model = model_hint
+                        remaining = int(settings.training_estimate_seconds * max(0.0, 1.0 - percent / 100.0))
+                        database.update_job_progress(
+                            job["id"], stage, _progress_detail(stage), percent, remaining
+                        )
+                for line in reader:
+                    parsed = _progress_from_line(line, current_model)
+                    if parsed is not None:
+                        stage, model_hint, percent = parsed
+                        if model_hint is not None:
+                            current_model = model_hint
+                        remaining = int(settings.training_estimate_seconds * max(0.0, 1.0 - percent / 100.0))
+                        database.update_job_progress(
+                            job["id"], stage, _progress_detail(stage), percent, remaining
+                        )
+            return_code = process.wait()
+        if return_code != 0:
+            error = f"pipeline exited with code {return_code}"
             run_manifest_path = run_dir / "run_manifest.json"
             if run_manifest_path.is_file():
                 run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
@@ -216,6 +291,7 @@ def run_one(settings: Settings, database: Database) -> bool:
     finally:
         if log_path.is_file() and run_dir.is_dir():
             shutil.copy2(log_path, run_dir / "worker.log")
+        cleanup_old_jobs(settings, database)
     return True
 
 

@@ -46,4 +46,7 @@ def test_system_config_allows_unconfigured_official_dataset(tmp_path: Path) -> N
             headers={"Authorization": "Bearer test-token"},
         )
         assert response.status_code == 200
-        assert response.json() == {"official_dataset_id": None}
+        payload = response.json()
+        assert payload["official_dataset_id"] is None
+        assert payload["oss_backup_configured"] is False
+        assert payload["cleanup_policy"]["failed_days"] == 7
