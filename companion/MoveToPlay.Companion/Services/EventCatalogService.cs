@@ -85,6 +85,20 @@ public sealed partial class EventCatalogService
         File.Move(temporary, CatalogPath, overwrite: true);
     }
 
+    public IReadOnlyList<TrainingEventOption> RestoreMissingDefaults()
+    {
+        var restored = Load().ToList();
+        foreach (var item in Defaults)
+        {
+            if (restored.All(existing => !existing.Type.Equals(item.Type, StringComparison.Ordinal)))
+            {
+                restored.Add(item);
+            }
+        }
+        Save(restored);
+        return restored;
+    }
+
     public static bool IsValid(TrainingEventOption item) =>
         !string.IsNullOrWhiteSpace(item.DisplayName) &&
         EventIdRegex().IsMatch(item.Type) &&
