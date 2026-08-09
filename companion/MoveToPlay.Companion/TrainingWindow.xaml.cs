@@ -895,7 +895,14 @@ public partial class TrainingWindow : Window
         ApproveButton.IsEnabled = _activeJob.Status == "passed" && string.IsNullOrWhiteSpace(_activeJob.ApprovedAt);
         BuildFirmwareButton.IsEnabled = _activeJob.Status == "passed" && !string.IsNullOrWhiteSpace(_activeJob.ApprovedAt);
         FirmwareStatusText.Text = BuildFirmwareButton.IsEnabled
-            ? "模型已确认采用，可以生成 Dongle 固件"
+            ? _activeJob.FirmwareStatus switch
+            {
+                "ready" => "云端固件已就绪，可以下载并校验",
+                "queued" => "云端固件正在排队编译",
+                "building" => $"云端固件编译中 {_activeJob.FirmwareProgressPercent:0}%",
+                "failed" => $"云端固件编译失败：{_activeJob.FirmwareError}",
+                _ => "模型已确认采用，可以请求云端生成固件",
+            }
             : "等待训练通过并确认采用模型";
 
         var manifestArtifact = _artifacts.FirstOrDefault(item => item.Path == "run_manifest.json");
@@ -1305,9 +1312,11 @@ public partial class TrainingWindow : Window
         await BuildActiveFirmwareAsync();
     }
 
-    private async Task<bool> BuildActiveFirmwareAsync(IProgress<FirmwareDeploymentProgress>? externalProgress = null)
+    private async Task<bool> BuildActiveFirmwareAsync(
+        IProgress<FirmwareDeploymentProgress>? externalProgress = null,
+        bool forceCloudRebuild = false)
     {
-        if (_activeJob is null || _activeJob.Status != "passed" || string.IsNullOrWhiteSpace(_activeJob.ApprovedAt))
+        if (_api is null || _activeJob is null || _activeJob.Status != "passed" || string.IsNullOrWhiteSpace(_activeJob.ApprovedAt))
         {
             return false;
         }
@@ -1316,7 +1325,7 @@ public partial class TrainingWindow : Window
         _firmwareCancellation = new CancellationTokenSource();
         SetFirmwareBusy(true);
         FirmwareProgress.Value = 0;
-        var progress = new Progress<FirmwareDeploymentProgress>(value =>
+        IProgress<FirmwareDeploymentProgress> progress = new Progress<FirmwareDeploymentProgress>(value =>
         {
             FirmwareStatusText.Text = $"{value.Stage}：{value.Detail}";
             FirmwareProgress.IsIndeterminate = value.IsIndeterminate;
@@ -1325,26 +1334,59 @@ public partial class TrainingWindow : Window
         });
         try
         {
-            _firmwarePackage = await _firmwareDeployment.BuildDongleAsync(
+            if (forceCloudRebuild || _activeJob.FirmwareStatus != "ready")
+            {
+                FirmwareStatusText.Text = forceCloudRebuild ? "已请求云端重新编译固件" : "正在请求云端固件";
+                _activeJob = await _api.RequestFirmwareAsync(
+                    _activeJob.Id, forceCloudRebuild, _firmwareCancellation.Token);
+            }
+            if (_activeJob.FirmwareStatus is "queued" or "building")
+            {
+                _activeJob = await _api.WaitForFirmwareAsync(
+                    _activeJob.Id,
+                    job => Dispatcher.Invoke(() =>
+                    {
+                        var value = new FirmwareDeploymentProgress(
+                            "云端编译", job.FirmwareDetail ?? "服务器正在编译 Dongle 固件",
+                            Math.Clamp(job.FirmwareProgressPercent * 0.75, 0, 75),
+                            job.FirmwareProgressPercent <= 2);
+                        progress.Report(value);
+                    }),
+                    _firmwareCancellation.Token);
+            }
+            if (_activeJob.FirmwareStatus != "ready")
+            {
+                throw new InvalidOperationException(_activeJob.FirmwareError ?? "云端固件编译未成功完成。 ");
+            }
+            _artifacts = await _api.ListArtifactsAsync(_activeJob.Id, _firmwareCancellation.Token);
+            var bundle = _artifacts.FirstOrDefault(item => item.Path == "firmware/firmware-bundle.zip")
+                ?? throw new FileNotFoundException("服务器报告固件已完成，但固件包产物不存在。 ");
+            var cache = Path.Combine(_history.CacheDirectory(_activeJob.Id), "firmware");
+            Directory.CreateDirectory(cache);
+            var bundlePath = Path.Combine(cache, "firmware-bundle.zip");
+            progress.Report(new FirmwareDeploymentProgress("下载固件", "正在下载云端编译好的完整固件包", 76));
+            await _api.DownloadArtifactAsync(
+                _activeJob.Id, bundle.Path, bundlePath, bundle.Sha256, _firmwareCancellation.Token);
+            _firmwarePackage = await _firmwareDeployment.PrepareCloudFirmwareAsync(
                 _activeJob.Id,
-                _history.CacheDirectory(_activeJob.Id),
+                bundlePath,
                 progress,
                 _firmwareCancellation.Token);
             FirmwareStatusText.Text =
-                $"固件已生成：{_firmwarePackage.AppBytes / 1024d / 1024d:0.00} MiB；请选择蓝灯 Dongle 的串口后烧录";
+                $"云端固件已下载并校验：主程序 {_firmwarePackage.AppBytes / 1024d / 1024d:0.00} MiB；请选择蓝灯 Dongle 串口";
             RefreshFirmwarePorts();
             FlashFirmwareButton.IsEnabled = FirmwarePortSelector.SelectedItem is string;
             return true;
         }
         catch (OperationCanceledException)
         {
-            FirmwareStatusText.Text = "固件生成已取消";
+            FirmwareStatusText.Text = "固件下载已取消";
             return false;
         }
         catch (Exception exception)
         {
-            FirmwareStatusText.Text = "固件生成失败";
-            MessageBox.Show(this, exception.Message, "生成 Dongle 固件失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            FirmwareStatusText.Text = "云端固件准备失败";
+            MessageBox.Show(this, exception.Message, "准备 Dongle 固件失败", MessageBoxButton.OK, MessageBoxImage.Error);
             return false;
         }
         finally
@@ -1357,7 +1399,7 @@ public partial class TrainingWindow : Window
     {
         if (_firmwarePackage is null)
         {
-            MessageBox.Show(this, "请先生成包含新模型的 Dongle 固件。", "没有固件", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show(this, "请先下载并校验云端生成的 Dongle 固件。", "没有固件", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
         if (FirmwarePortSelector.SelectedItem is not string port)
@@ -1440,7 +1482,7 @@ public partial class TrainingWindow : Window
         {
             return;
         }
-        await BuildActiveFirmwareAsync();
+        await BuildActiveFirmwareAsync(forceCloudRebuild: true);
     }
 
     private async void RollbackSelectedModel_Click(object sender, RoutedEventArgs e)
@@ -1454,7 +1496,7 @@ public partial class TrainingWindow : Window
         }
         var confirmation = MessageBox.Show(
             this,
-            $"将回滚到 {selected.VersionDisplay}，自动重新生成固件并通过 {port} 烧录。\n\n" +
+            $"将回滚到 {selected.VersionDisplay}，下载其云端固件并通过 {port} 烧录。\n\n" +
             "请确认 Dongle 已进入蓝灯维护模式，烧录期间不要拔线。是否继续？",
             "一键回滚模型",
             MessageBoxButton.YesNo,
@@ -1469,7 +1511,7 @@ public partial class TrainingWindow : Window
         RollbackProgress.Value = 0;
         try
         {
-            RollbackStatusText.Text = "正在下载并校验历史模型 C 数组";
+            RollbackStatusText.Text = "正在读取历史模型的云端固件状态";
             if (!await LoadCloudJobAsync(selected.Id, switchToCloudTab: false))
             {
                 return;
@@ -1478,11 +1520,11 @@ public partial class TrainingWindow : Window
             {
                 RollbackProgress.IsIndeterminate = value.IsIndeterminate;
                 RollbackProgress.Value = value.Percent * 0.55;
-                RollbackStatusText.Text = $"生成固件 · {value.Stage}：{value.Detail}";
+                RollbackStatusText.Text = $"准备固件 · {value.Stage}：{value.Detail}";
             });
             if (!await BuildActiveFirmwareAsync(buildProgress))
             {
-                RollbackStatusText.Text = "历史固件生成失败，未执行烧录";
+                RollbackStatusText.Text = "历史固件下载或校验失败，未执行烧录";
                 return;
             }
             var flashProgress = new Progress<FirmwareDeploymentProgress>(value =>

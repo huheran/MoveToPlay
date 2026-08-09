@@ -158,6 +158,32 @@ public sealed class CloudTrainingApiClient : IDisposable
     public Task<CloudJob> ApproveAsync(string jobId, string approvedBy, CancellationToken cancellationToken = default) =>
         SendJsonAsync<CloudJob>(HttpMethod.Post, $"/api/v1/jobs/{jobId}/approve", new { approved_by = approvedBy }, cancellationToken);
 
+    public Task<CloudJob> RequestFirmwareAsync(string jobId, bool force = false, CancellationToken cancellationToken = default) =>
+        SendJsonAsync<CloudJob>(HttpMethod.Post, $"/api/v1/jobs/{jobId}/firmware", new { force }, cancellationToken);
+
+    public async Task<CloudJob> WaitForFirmwareAsync(
+        string jobId,
+        Action<CloudJob>? changed = null,
+        CancellationToken cancellationToken = default)
+    {
+        string? previous = null;
+        while (true)
+        {
+            var job = await GetJobAsync(jobId, cancellationToken);
+            var signature = $"{job.FirmwareStatus}|{job.FirmwareProgressPercent:0.0}|{job.FirmwareDetail}|{job.FirmwareError}";
+            if (!string.Equals(signature, previous, StringComparison.Ordinal))
+            {
+                previous = signature;
+                changed?.Invoke(job);
+            }
+            if (job.FirmwareStatus is "ready" or "failed")
+            {
+                return job;
+            }
+            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+        }
+    }
+
     public async Task DownloadArtifactAsync(
         string jobId,
         string artifactPath,

@@ -54,21 +54,21 @@ if (args.SequenceEqual(["--collection-library"]))
     }
 }
 
-if (args.Length == 3 && args[0].Equals("--firmware-build", StringComparison.OrdinalIgnoreCase))
+if (args.Length == 3 && args[0].Equals("--firmware-package", StringComparison.OrdinalIgnoreCase))
 {
     var jobId = args[1];
-    var cacheDirectory = Path.GetFullPath(args[2]);
+    var bundlePath = Path.GetFullPath(args[2]);
     var deployment = new FirmwareDeploymentService();
-    var package = await deployment.BuildDongleAsync(
+    var package = await deployment.PrepareCloudFirmwareAsync(
         jobId,
-        cacheDirectory,
+        bundlePath,
         new Progress<MoveToPlay.Companion.Models.FirmwareDeploymentProgress>(value =>
             Console.WriteLine($"[firmware] {value.Stage}: {value.Detail}")));
-    if (!File.Exists(package.AppBinaryPath) || !File.Exists(package.ManifestPath))
+    if (package.Files.Count < 3 || package.Files.Any(file => !File.Exists(file.Path)) || !File.Exists(package.ManifestPath))
     {
         throw new InvalidOperationException("固件产物或清单不存在");
     }
-    Console.WriteLine($"[smoke] Dongle 固件构建 PASS：{package.AppBinaryPath}");
+    Console.WriteLine($"[smoke] 云端 Dongle 固件包校验 PASS：{package.PackageDirectory}");
     return;
 }
 
