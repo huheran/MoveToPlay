@@ -95,3 +95,19 @@ def test_worker_progress_tracks_both_models() -> None:
     assert _progress_from_line("[pipeline] model=event_rf quality=PASS", "event") == (
         "quality_gate", "event", 90
     )
+
+
+def test_initialize_normalizes_legacy_completed_progress(tmp_path: Path) -> None:
+    _, database, _ = make_passed_job(tmp_path)
+    with sqlite3.connect(database.path) as connection:
+        connection.execute(
+            "UPDATE jobs SET progress_stage = 'queued', progress_percent = 0 WHERE id = ?",
+            ("a" * 32,),
+        )
+
+    database.initialize()
+
+    row = database.get_job("a" * 32)
+    assert row is not None
+    assert row["progress_stage"] == "completed"
+    assert row["progress_percent"] == 100

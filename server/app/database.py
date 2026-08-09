@@ -115,6 +115,23 @@ class Database:
             for name, definition in migrations.items():
                 if name not in job_columns:
                     connection.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
+            # 旧版本任务在增加进度字段时会得到 queued/0 的默认值。把已经结束的
+            # 历史记录归一化，避免模型版本库把旧模型误显示成仍在排队。
+            connection.execute(
+                """UPDATE jobs SET progress_stage = 'completed',
+                       progress_detail = '训练与模型导出已完成', progress_percent = 100,
+                       estimated_remaining_seconds = 0,
+                       progress_updated_at = COALESCE(progress_updated_at, finished_at)
+                   WHERE status IN ('passed', 'validated')
+                     AND (progress_stage = 'queued' OR progress_percent < 100)"""
+            )
+            connection.execute(
+                """UPDATE jobs SET progress_stage = 'failed',
+                       progress_detail = COALESCE(progress_detail, '训练任务失败'),
+                       estimated_remaining_seconds = 0,
+                       progress_updated_at = COALESCE(progress_updated_at, finished_at)
+                   WHERE status = 'failed' AND progress_stage = 'queued'"""
+            )
             approved_rows = connection.execute(
                 "SELECT * FROM jobs WHERE approved_at IS NOT NULL AND model_version IS NULL"
             ).fetchall()
