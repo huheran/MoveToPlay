@@ -697,9 +697,9 @@
                                 </StackPanel>
                                 <TextBlock Margin="0,18,18,0" MaxWidth="520" FontSize="12" LineHeight="21"
                                            Foreground="#FFC7D2E2" TextWrapping="Wrap"
-                                           Text="点击右侧按钮打开独立控制窗。拖动位置或调整文字大小时，效果会直接实时显示在目标游戏所在的整个屏幕上。" />
+                                           Text="“打开悬浮层控制”用于调整位置和文字大小；“显示悬浮层”用于正常游玩。控制效果会实时显示在目标游戏屏幕上。" />
                             </StackPanel>
-                            <StackPanel Grid.Column="1" Width="150" VerticalAlignment="Center">
+                            <StackPanel Grid.Column="1" Width="160" VerticalAlignment="Center">
                                 <Border Padding="10,7" Background="#152DD4BF" CornerRadius="999">
                                     <StackPanel HorizontalAlignment="Center" Orientation="Horizontal">
                                         <Ellipse Width="7" Height="7" Margin="0,0,7,0"
@@ -708,9 +708,12 @@
                                                    Foreground="#FFD9E5F3" Text="当前未显示" />
                                     </StackPanel>
                                 </Border>
-                                <Button x:Name="DashboardOverlayButton" Margin="0,12,0,0"
-                                        Style="{StaticResource PrimaryButton}" Content="打开悬浮层控制"
+                                <Button x:Name="DashboardOverlayButton" Margin="0,9,0,0" Height="34"
+                                        Style="{StaticResource GhostButton}" Content="打开悬浮层控制"
                                         Click="OpenOverlayControlWindow_Click" />
+                                <Button x:Name="DashboardToggleOverlayButton" Margin="0,8,0,0" Height="34"
+                                        Style="{StaticResource PrimaryButton}" Content="显示悬浮层"
+                                        Click="ToggleOverlayButton_Click" />
                             </StackPanel>
                         </Grid>
                     </Border>
