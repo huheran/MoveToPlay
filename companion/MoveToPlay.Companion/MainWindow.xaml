@@ -385,8 +385,16 @@
                                                    Foreground="#FF7F8CA3" Text="BLADE" />
                                     </StackPanel>
                                 </UniformGrid>
-                                <Button Margin="0,16,0,0" Height="34" Style="{StaticResource GhostButton}"
-                                        Content="数据采集与云端训练" Click="OpenTrainingWindow_Click" />
+                                <Grid Margin="0,16,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button Height="34" Padding="12,0" Style="{StaticResource GhostButton}"
+                                            Content="刷新状态" Click="RefreshDeviceStatus_Click" />
+                                    <Button Grid.Column="1" Margin="8,0,0,0" Height="34" Style="{StaticResource GhostButton}"
+                                            Content="数据采集与云端训练" Click="OpenTrainingWindow_Click" />
+                                </Grid>
                             </StackPanel>
                         </Border>
 

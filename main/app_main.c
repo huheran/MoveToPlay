@@ -9,7 +9,6 @@
 #include "driver/spi_master.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
-#include "esp_sleep.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_adc/adc_oneshot.h"
@@ -164,20 +163,12 @@ static const char *TAG = "imu_main";
 #define BLADE_BUTTON_GPIO             GPIO_NUM_4
 #define BLADE_POLL_RATE_HZ            50
 #define BLADE_POLL_PERIOD_MS          (1000 / BLADE_POLL_RATE_HZ)
-#define BLADE_IDLE_HEARTBEAT_RATE_HZ  5
-#define BLADE_IDLE_HEARTBEAT_PERIOD_MS (1000 / BLADE_IDLE_HEARTBEAT_RATE_HZ)
-#define BLADE_PRESSED_REPORT_RATE_HZ  25
-#define BLADE_PRESSED_REPORT_PERIOD_MS (1000 / BLADE_PRESSED_REPORT_RATE_HZ)
-#define BLADE_STATE_CHANGE_BURST_COUNT 3
+#define BLADE_REPORT_RATE_HZ          25
+#define BLADE_REPORT_PERIOD_MS        (1000 / BLADE_REPORT_RATE_HZ)
 #define BLADE_DEBOUNCE_SAMPLES        3
 #define BLADE_ENABLE_SERIAL_OUTPUT    0
 #define BLADE_SERIAL_STATE_RATE_HZ    10
 #define BLADE_SERIAL_STATE_PERIOD_MS  (1000 / BLADE_SERIAL_STATE_RATE_HZ)
-#define BLADE_SLEEP_SHORT_PRESS_MAX_MS 600
-#define BLADE_SLEEP_SHORT_PRESS_COUNT  4
-#define BLADE_SLEEP_SEQUENCE_GAP_MS    700
-#define BLADE_SLEEP_HOLD_MS           5000
-#define BLADE_WAKE_CONFIRM_HOLD_MS    3000
 
 /* Heart-rate connector on the Blade: ESP32 side of the PCA9306 is 3.3 V. */
 #define BLADE_HEART_RATE_SDA_GPIO     GPIO_NUM_6
@@ -229,16 +220,8 @@ static const char *TAG = "imu_main";
 #error "BLADE_POLL_RATE_HZ must be greater than 0"
 #endif
 
-#if BLADE_IDLE_HEARTBEAT_RATE_HZ <= 0
-#error "BLADE_IDLE_HEARTBEAT_RATE_HZ must be greater than 0"
-#endif
-
-#if BLADE_PRESSED_REPORT_RATE_HZ <= 0
-#error "BLADE_PRESSED_REPORT_RATE_HZ must be greater than 0"
-#endif
-
-#if BLADE_STATE_CHANGE_BURST_COUNT <= 0
-#error "BLADE_STATE_CHANGE_BURST_COUNT must be greater than 0"
+#if BLADE_REPORT_RATE_HZ <= 0
+#error "BLADE_REPORT_RATE_HZ must be greater than 0"
 #endif
 
 #if (MOVE_TO_PLAY_TRACKER_NODE_ID < 1) || (MOVE_TO_PLAY_TRACKER_NODE_ID > DONGLE_MAX_TRACKER_NODES)
@@ -2694,7 +2677,7 @@ static int dongle_telemetry_battery_value(const dongle_status_node_snapshot_t *n
     return node->battery_valid ? (int)node->battery_percent : -1;
 }
 
-static void dongle_telemetry_maybe_send(int64_t now_us)
+static void dongle_telemetry_maybe_send(int64_t now_us, const char *runtime_mode)
 {
     if (!usb_telemetry_is_ready() ||
         now_us - s_dongle_last_telemetry_send_us <
@@ -2737,13 +2720,14 @@ static void dongle_telemetry_maybe_send(int64_t now_us)
         line,
         sizeof(line),
         "{\"v\":1,\"source\":\"MoveToPlay-Dongle\",\"seq\":%" PRIu32
-        ",\"time_ms\":%" PRIu64 ",\"type\":\"state\",\"runtime_mode\":\"play\",\"action_id\":%u"
+        ",\"time_ms\":%" PRIu64 ",\"type\":\"state\",\"runtime_mode\":\"%s\",\"action_id\":%u"
         ",\"action\":\"%s\",\"confidence\":%u,\"intensity\":%u,\"active\":%s"
         ",\"event_count\":%" PRIu32 ",\"event_action\":\"%s\",\"event\":\"%s\""
         ",\"tracker_mask\":%u,\"tracker_online\":%u,\"quality\":%u"
         ",\"blade_online\":%s,\"battery\":[%d,%d,%d,%d,%d]}\n",
         s_dongle_telemetry_packet_sequence++,
         (uint64_t)(now_us / 1000LL),
+        (runtime_mode != NULL) ? runtime_mode : "play",
         action_class,
         dongle_action_class_name(action_class),
         confidence_percent,
@@ -3709,9 +3693,12 @@ static void espnow_rx_task(void *arg)
                     dongle_run_rf_inference(esp_timer_get_time());
 #endif
 #if DONGLE_ENABLE_USB_TELEMETRY
-                    dongle_telemetry_maybe_send(esp_timer_get_time());
+                    dongle_telemetry_maybe_send(esp_timer_get_time(), "play");
 #endif
                 } else if (runtime_mode == DONGLE_RUNTIME_COLLECT) {
+#if DONGLE_ENABLE_USB_TELEMETRY
+                    dongle_telemetry_maybe_send(esp_timer_get_time(), "collect");
+#endif
                     dongle_send_pending_blade_markers();
                     dongle_send_latest_nodes_csv(esp_timer_get_time());
                 }
@@ -3858,49 +3845,6 @@ static uint32_t elapsed_ms_since(TickType_t start_tick, TickType_t now_tick)
     return (uint32_t)((now_tick - start_tick) * portTICK_PERIOD_MS);
 }
 
-static esp_err_t blade_enable_deep_sleep_wakeup(void)
-{
-    const uint64_t wake_mask = (1ULL << (uint32_t)BLADE_BUTTON_GPIO);
-
-    esp_err_t err = esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    err = gpio_sleep_set_pull_mode(BLADE_BUTTON_GPIO, GPIO_PULLUP_ONLY);
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    return esp_sleep_enable_ext1_wakeup_io(wake_mask, ESP_EXT1_WAKEUP_ANY_LOW);
-}
-
-static void blade_enter_deep_sleep(const char *reason)
-{
-    const char *sleep_reason = (reason != NULL) ? reason : "unknown";
-
-    ESP_LOGI(TAG,
-             "Blade entering deep sleep: reason=%s, wake=GPIO%d low",
-             sleep_reason,
-             BLADE_BUTTON_GPIO);
-    printf("# blade-sleep: reason=%s wake_gpio=%d wake_level=low\n",
-           sleep_reason,
-           BLADE_BUTTON_GPIO);
-
-    status_led_off();
-    (void)max30102_shutdown();
-    (void)blade_button_init();
-
-    esp_err_t wake_err = blade_enable_deep_sleep_wakeup();
-    if (wake_err != ESP_OK) {
-        ESP_LOGE(TAG, "Blade deep sleep wakeup config failed: %s", esp_err_to_name(wake_err));
-        return;
-    }
-
-    vTaskDelay(pdMS_TO_TICKS(50));
-    esp_deep_sleep_start();
-}
-
 typedef struct {
     float dc;
     float envelope;
@@ -4023,44 +3967,6 @@ static void blade_heart_rate_task(void *arg)
     }
 }
 
-static bool blade_woke_from_button_sleep(void)
-{
-    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-    return cause == ESP_SLEEP_WAKEUP_EXT1 || cause == ESP_SLEEP_WAKEUP_GPIO;
-}
-
-static void blade_confirm_wake_hold_or_sleep(void)
-{
-    if (!blade_woke_from_button_sleep()) {
-        return;
-    }
-
-    ESP_LOGI(TAG,
-             "Blade woke by button, hold GPIO%d for %d ms to start",
-             BLADE_BUTTON_GPIO,
-             BLADE_WAKE_CONFIRM_HOLD_MS);
-    printf("# blade-wake: hold_required_ms=%d\n", BLADE_WAKE_CONFIRM_HOLD_MS);
-
-    TickType_t start_tick = xTaskGetTickCount();
-    while (elapsed_ms_since(start_tick, xTaskGetTickCount()) < BLADE_WAKE_CONFIRM_HOLD_MS) {
-        if (!blade_button_is_pressed()) {
-            ESP_LOGI(TAG, "Blade wake hold released before confirmation");
-            blade_enter_deep_sleep("wake_hold_released");
-            return;
-        }
-        vTaskDelay(pdMS_TO_TICKS(BLADE_POLL_PERIOD_MS));
-    }
-
-    ESP_LOGI(TAG, "Blade wake hold confirmed, starting normal mode");
-    printf("# blade-wake: confirmed=1\n");
-}
-
-typedef enum {
-    BLADE_SLEEP_GESTURE_IDLE = 0,
-    BLADE_SLEEP_GESTURE_COLLECT_SHORT_PRESSES,
-    BLADE_SLEEP_GESTURE_FINAL_HOLD,
-} blade_sleep_gesture_state_t;
-
 static void blade_report_task(void *arg)
 {
     (void)arg;
@@ -4069,16 +3975,10 @@ static void blade_report_task(void *arg)
     TickType_t last_report_tick = 0;
     TickType_t last_send_error_log_tick = 0;
     uint32_t sequence = 0;
-    uint8_t report_burst_remaining = BLADE_STATE_CHANGE_BURST_COUNT;
     bool last_raw_pressed = blade_button_is_pressed();
     bool stable_pressed = last_raw_pressed;
     uint32_t stable_edge_timestamp_us = (uint32_t)esp_timer_get_time();
     uint8_t same_sample_count = BLADE_DEBOUNCE_SAMPLES;
-    blade_sleep_gesture_state_t sleep_gesture_state = BLADE_SLEEP_GESTURE_IDLE;
-    uint8_t sleep_short_press_count = 0;
-    TickType_t press_start_tick = last_wake;
-    TickType_t last_short_release_tick = 0;
-    TickType_t final_hold_start_tick = 0;
 #if BLADE_ENABLE_SERIAL_OUTPUT
     TickType_t last_serial_tick = 0;
 #endif
@@ -4088,7 +3988,6 @@ static void blade_report_task(void *arg)
              stable_pressed ? "pressed" : "released");
 
     while (1) {
-        bool state_changed = false;
         const int gpio_level = gpio_get_level(BLADE_BUTTON_GPIO);
         const bool raw_pressed = gpio_level == 0;
         const TickType_t now_tick = xTaskGetTickCount();
@@ -4110,7 +4009,6 @@ static void blade_report_task(void *arg)
                     captured_edge : (uint32_t)esp_timer_get_time();
                 s_blade_pending_press_edge_us = 0;
             }
-            state_changed = true;
             led_set(stable_pressed);
             ESP_LOGI(TAG, "blade button state: %s",
                      stable_pressed ? "pressed" : "released");
@@ -4120,84 +4018,10 @@ static void blade_report_task(void *arg)
             s_blade_pending_press_edge_us = 0;
         }
 
-        if (state_changed) {
-            if (stable_pressed) {
-                press_start_tick = now_tick;
-                if (sleep_gesture_state == BLADE_SLEEP_GESTURE_COLLECT_SHORT_PRESSES &&
-                    sleep_short_press_count >= BLADE_SLEEP_SHORT_PRESS_COUNT &&
-                    elapsed_ms_since(last_short_release_tick, now_tick) <= BLADE_SLEEP_SEQUENCE_GAP_MS) {
-                    sleep_gesture_state = BLADE_SLEEP_GESTURE_FINAL_HOLD;
-                    final_hold_start_tick = now_tick;
-                    ESP_LOGI(TAG,
-                             "Blade sleep gesture: final hold detected after %u short presses, hold %d ms to sleep",
-                             sleep_short_press_count,
-                             BLADE_SLEEP_HOLD_MS);
-                    printf("# blade-sleep-gesture: stage=final_hold short_count=%u hold_required_ms=%d\n",
-                           sleep_short_press_count,
-                           BLADE_SLEEP_HOLD_MS);
-                }
-            } else {
-                const uint32_t press_ms = elapsed_ms_since(press_start_tick, now_tick);
-                if (sleep_gesture_state == BLADE_SLEEP_GESTURE_FINAL_HOLD) {
-                    sleep_gesture_state = BLADE_SLEEP_GESTURE_IDLE;
-                    sleep_short_press_count = 0;
-                    ESP_LOGI(TAG, "Blade sleep gesture cancelled before long hold");
-                    printf("# blade-sleep-gesture: stage=cancelled press_ms=%" PRIu32 "\n",
-                           press_ms);
-                } else if (press_ms <= BLADE_SLEEP_SHORT_PRESS_MAX_MS) {
-                    if (sleep_gesture_state == BLADE_SLEEP_GESTURE_COLLECT_SHORT_PRESSES &&
-                        elapsed_ms_since(last_short_release_tick, now_tick) <= BLADE_SLEEP_SEQUENCE_GAP_MS) {
-                        if (sleep_short_press_count < UINT8_MAX) {
-                            sleep_short_press_count++;
-                        }
-                    } else {
-                        sleep_short_press_count = 1;
-                    }
-
-                    sleep_gesture_state = BLADE_SLEEP_GESTURE_COLLECT_SHORT_PRESSES;
-                    last_short_release_tick = now_tick;
-                    ESP_LOGI(TAG,
-                             "Blade sleep gesture: short press %u/%u, next press must start within %d ms",
-                             sleep_short_press_count,
-                             BLADE_SLEEP_SHORT_PRESS_COUNT,
-                             BLADE_SLEEP_SEQUENCE_GAP_MS);
-                    printf("# blade-sleep-gesture: stage=short_press count=%u required=%u press_ms=%" PRIu32 "\n",
-                           sleep_short_press_count,
-                           BLADE_SLEEP_SHORT_PRESS_COUNT,
-                           press_ms);
-                } else if (sleep_gesture_state != BLADE_SLEEP_GESTURE_IDLE) {
-                    sleep_gesture_state = BLADE_SLEEP_GESTURE_IDLE;
-                    sleep_short_press_count = 0;
-                    ESP_LOGI(TAG, "Blade sleep gesture cancelled by long non-final press");
-                    printf("# blade-sleep-gesture: stage=cancelled_long_press press_ms=%" PRIu32 "\n",
-                           press_ms);
-                }
-            }
-        }
-
-        if (sleep_gesture_state == BLADE_SLEEP_GESTURE_COLLECT_SHORT_PRESSES &&
-            elapsed_ms_since(last_short_release_tick, now_tick) > BLADE_SLEEP_SEQUENCE_GAP_MS) {
-            sleep_gesture_state = BLADE_SLEEP_GESTURE_IDLE;
-            sleep_short_press_count = 0;
-        }
-
-        if (sleep_gesture_state == BLADE_SLEEP_GESTURE_FINAL_HOLD &&
-            stable_pressed &&
-            elapsed_ms_since(final_hold_start_tick, now_tick) >= BLADE_SLEEP_HOLD_MS) {
-            blade_enter_deep_sleep("quad_click_long_hold");
-        }
-
-        if (state_changed) {
-            report_burst_remaining = BLADE_STATE_CHANGE_BURST_COUNT;
-        }
-
-        const uint32_t report_period_ms = stable_pressed ?
-            BLADE_PRESSED_REPORT_PERIOD_MS : BLADE_IDLE_HEARTBEAT_PERIOD_MS;
         const bool periodic_report_due =
-            elapsed_ms_since(last_report_tick, now_tick) >= report_period_ms;
-        const bool should_report = (report_burst_remaining > 0) || periodic_report_due;
+            elapsed_ms_since(last_report_tick, now_tick) >= BLADE_REPORT_PERIOD_MS;
 
-        if (should_report) {
+        if (periodic_report_due) {
             esp_err_t send_err = ESP_OK;
 #if MOVE_TO_PLAY_ENABLE_ESPNOW
             send_err = m2p_espnow_send_blade_state(BLADE_NODE_ID,
@@ -4218,8 +4042,7 @@ static void blade_report_task(void *arg)
             }
 #endif
 #if BLADE_ENABLE_SERIAL_OUTPUT
-            if (state_changed ||
-                (now_tick - last_serial_tick) >= pdMS_TO_TICKS(BLADE_SERIAL_STATE_PERIOD_MS)) {
+            if ((now_tick - last_serial_tick) >= pdMS_TO_TICKS(BLADE_SERIAL_STATE_PERIOD_MS)) {
                 printf("# blade-tx: node_id=%u pressed=%d raw_pressed=%d gpio=%d"
                        " seq=%" PRIu32 " battery_valid=%d battery=%u%% battery_mv=%u send=%s\n",
                        BLADE_NODE_ID,
@@ -4234,9 +4057,6 @@ static void blade_report_task(void *arg)
                 last_serial_tick = now_tick;
             }
 #endif
-            if (report_burst_remaining > 0) {
-                report_burst_remaining--;
-            }
             last_report_tick = now_tick;
             sequence++;
         }
@@ -4415,11 +4235,9 @@ static void start_blade_mode(void)
     ESP_LOGI(TAG, "node_id=%d", BLADE_NODE_ID);
     ESP_LOGI(TAG, "esp-now channel=%d", M2P_ESPNOW_CHANNEL);
     ESP_LOGI(TAG,
-             "poll_rate_hz=%d idle_heartbeat_hz=%d pressed_report_hz=%d burst_count=%d",
+             "poll_rate_hz=%d fixed_report_hz=%d power_control=physical_switch",
              BLADE_POLL_RATE_HZ,
-             BLADE_IDLE_HEARTBEAT_RATE_HZ,
-             BLADE_PRESSED_REPORT_RATE_HZ,
-             BLADE_STATE_CHANGE_BURST_COUNT);
+             BLADE_REPORT_RATE_HZ);
 
     led_set(false);
 
@@ -4428,8 +4246,6 @@ static void start_blade_mode(void)
         ESP_LOGE(TAG, "Blade button GPIO init failed: %s", esp_err_to_name(button_err));
         return;
     }
-
-    blade_confirm_wake_hold_or_sleep();
 
     esp_err_t edge_capture_err = blade_button_edge_capture_init();
     if (edge_capture_err != ESP_OK) {
@@ -4516,13 +4332,7 @@ void app_main(void)
 {
     led_init();
 
-    const esp_sleep_wakeup_cause_t wake_cause = esp_sleep_get_wakeup_cause();
-    const bool blade_button_wakeup =
-        MOVE_TO_PLAY_DEVICE_MODE == MOVE_TO_PLAY_MODE_BLADE &&
-        (wake_cause == ESP_SLEEP_WAKEUP_EXT1 || wake_cause == ESP_SLEEP_WAKEUP_GPIO);
-    if (!blade_button_wakeup) {
-        led_blink_startup(3, 120, 120);
-    }
+    led_blink_startup(3, 120, 120);
 
     ESP_LOGI(TAG, "Booting MoveToPlay");
     ESP_LOGI(TAG, "device_mode=%d (0=dongle, 1=tracker, 2=blade)",

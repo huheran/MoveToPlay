@@ -3,6 +3,7 @@ using System.IO;
 using System.IO.Ports;
 using System.Media;
 using System.Text;
+using System.Text.Json;
 using MoveToPlay.Companion.Models;
 
 namespace MoveToPlay.Companion.Services;
@@ -26,11 +27,15 @@ public sealed class ImuCollectionService : IDisposable
     private int _bladeCountdownMs = 5000;
     private int _bladeLatencyCompensationMs = 50;
     private bool _bladeCountdownPending;
+    private int _automaticTargetCount = 30;
+    private long _lastBladeSeen;
     private readonly Dictionary<int, long> _lastNodeSeen = [];
 
     public event EventHandler<ImuCollectionStatus>? StatusChanged;
 
     public event EventHandler<BladeCountdownStatus>? CountdownChanged;
+
+    public event EventHandler? AutomaticSequenceCompleted;
 
     public string? SamplesPath { get; private set; }
 
@@ -57,7 +62,8 @@ public sealed class ImuCollectionService : IDisposable
         TrainingEventOption? selectedEvent,
         BladeMarkingMode mode,
         int countdownMs,
-        int latencyCompensationMs)
+        int latencyCompensationMs,
+        int automaticTargetCount)
     {
         lock (_gate)
         {
@@ -65,6 +71,7 @@ public sealed class ImuCollectionService : IDisposable
             _bladeMarkingMode = mode;
             _bladeCountdownMs = Math.Clamp(countdownMs, 300, 5000);
             _bladeLatencyCompensationMs = Math.Clamp(latencyCompensationMs, -500, 500);
+            _automaticTargetCount = Math.Clamp(automaticTargetCount, 1, 500);
         }
     }
 
@@ -85,6 +92,7 @@ public sealed class ImuCollectionService : IDisposable
         _eventSequence = 0;
         _eventCount = 0;
         _bladeCountdownPending = false;
+        _lastBladeSeen = 0;
         _lastNodeSeen.Clear();
         _samplesWriter = CreateWriter(SamplesPath);
         _eventsWriter = CreateWriter(EventsPath);
@@ -109,7 +117,7 @@ public sealed class ImuCollectionService : IDisposable
         }
         if (mode == BladeMarkingMode.Countdown)
         {
-            StartCountdownMarker(marker);
+            Publish(true, "倒计时模式由软件自动循环，无需手动触发");
             return;
         }
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -172,6 +180,7 @@ public sealed class ImuCollectionService : IDisposable
             port.Open();
             _port = port;
             Publish(true, $"{portName} 已连接，正在接收 Dongle 采集态原始数据");
+            StartAutomaticCountdownSequenceIfConfigured();
             while (!cancellationToken.IsCancellationRequested && port.IsOpen)
             {
                 try
@@ -199,6 +208,10 @@ public sealed class ImuCollectionService : IDisposable
 
     private void ProcessLine(string line)
     {
+        if (TryProcessDeviceStatus(line))
+        {
+            return;
+        }
         var parts = line.Trim().Split(',');
         if (TryProcessBladeMarker(parts))
         {
@@ -251,12 +264,63 @@ public sealed class ImuCollectionService : IDisposable
         {
             online = _lastNodeSeen.Where(pair => pair.Value >= cutoff).Select(pair => pair.Key).Order().ToArray();
         }
+        var bladeOnline = Interlocked.Read(ref _lastBladeSeen) >= cutoff;
         StatusChanged?.Invoke(this, new ImuCollectionStatus(
             running,
             detail,
             Interlocked.Read(ref _sampleCount),
             online,
-            Volatile.Read(ref _eventCount)));
+            Volatile.Read(ref _eventCount),
+            bladeOnline));
+    }
+
+    public void RefreshStatus() => Publish(IsRunning, "设备状态已手动刷新");
+
+    private bool TryProcessDeviceStatus(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line) || line[0] != '{')
+        {
+            return false;
+        }
+        try
+        {
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("source", out var source) ||
+                source.GetString() != "MoveToPlay-Dongle" ||
+                !root.TryGetProperty("type", out var type) ||
+                type.GetString() != "state")
+            {
+                return false;
+            }
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var trackerMask = root.TryGetProperty("tracker_mask", out var maskElement)
+                ? maskElement.GetInt32()
+                : 0;
+            var bladeOnline = root.TryGetProperty("blade_online", out var bladeElement) &&
+                bladeElement.ValueKind == JsonValueKind.True;
+            lock (_gate)
+            {
+                for (var nodeId = 1; nodeId <= 4; nodeId++)
+                {
+                    if ((trackerMask & (1 << (nodeId - 1))) != 0)
+                    {
+                        _lastNodeSeen[nodeId] = now;
+                    }
+                    else
+                    {
+                        _lastNodeSeen.Remove(nodeId);
+                    }
+                }
+            }
+            Interlocked.Exchange(ref _lastBladeSeen, bladeOnline ? now : 0);
+            Publish(true, "设备状态已更新");
+            return true;
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException or FormatException)
+        {
+            return false;
+        }
     }
 
     private bool TryProcessBladeMarker(string[] parts)
@@ -304,64 +368,81 @@ public sealed class ImuCollectionService : IDisposable
             return true;
         }
 
-        StartCountdownMarker(selected);
+        Publish(true, "倒计时模式正在自动采集，本次 Blade 单击不额外增加标签");
         return true;
     }
 
-    private void StartCountdownMarker(TrainingEventOption selected)
+    private void StartAutomaticCountdownSequenceIfConfigured()
     {
+        TrainingEventOption? selected;
+        BladeMarkingMode mode;
         CancellationToken cancellationToken;
         int countdownMs;
+        int targetCount;
         lock (_gate)
         {
-            if (_bladeCountdownPending)
+            selected = _selectedEvent;
+            mode = _bladeMarkingMode;
+            if (mode != BladeMarkingMode.Countdown || selected is null || _bladeCountdownPending)
             {
-                Publish(true, "倒计时尚未结束，本次 Blade 单击已忽略");
                 return;
             }
             _bladeCountdownPending = true;
             countdownMs = _bladeCountdownMs;
+            targetCount = _automaticTargetCount;
             cancellationToken = _cancellation?.Token ?? CancellationToken.None;
         }
-        Publish(true, $"{selected.DisplayName}：{countdownMs / 1000.0:0.0} 秒后开始动作");
-        _ = RunCountdownMarkerAsync(selected, countdownMs, cancellationToken);
+        Publish(true, $"自动采集即将开始：计划 {targetCount} 次 {selected.DisplayName}");
+        _ = RunAutomaticCountdownSequenceAsync(selected, countdownMs, targetCount, cancellationToken);
     }
 
-    private async Task RunCountdownMarkerAsync(
+    private async Task RunAutomaticCountdownSequenceAsync(
         TrainingEventOption marker,
         int countdownMs,
+        int targetCount,
         CancellationToken cancellationToken)
     {
         try
         {
-            var startedAt = Environment.TickCount64;
-            var previousSecond = -1;
-            while (true)
+            for (var completed = 0; completed < targetCount; completed++)
             {
-                var elapsed = (int)Math.Min(int.MaxValue, Environment.TickCount64 - startedAt);
-                var remaining = Math.Max(0, countdownMs - elapsed);
-                var second = (int)Math.Ceiling(remaining / 1000.0);
-                if (second != previousSecond)
+                var startedAt = Environment.TickCount64;
+                var previousSecond = -1;
+                while (true)
                 {
-                    previousSecond = second;
-                    CountdownChanged?.Invoke(this,
-                        new BladeCountdownStatus(marker.DisplayName, remaining, IsGo: false, IsCompleted: false));
+                    var elapsed = (int)Math.Min(int.MaxValue, Environment.TickCount64 - startedAt);
+                    var remaining = Math.Max(0, countdownMs - elapsed);
+                    var second = (int)Math.Ceiling(remaining / 1000.0);
+                    if (second != previousSecond)
+                    {
+                        previousSecond = second;
+                        CountdownChanged?.Invoke(this,
+                            new BladeCountdownStatus(marker.DisplayName, remaining, IsGo: false, IsCompleted: false,
+                                CompletedCount: completed, TargetCount: targetCount));
+                    }
+                    if (remaining <= 0)
+                    {
+                        break;
+                    }
+                    await Task.Delay(Math.Min(50, remaining), cancellationToken);
                 }
-                if (remaining <= 0)
+                SystemSounds.Asterisk.Play();
+                CountdownChanged?.Invoke(this,
+                    new BladeCountdownStatus(marker.DisplayName, 0, IsGo: true, IsCompleted: false,
+                        CompletedCount: completed, TargetCount: targetCount));
+                await Task.Delay(500, cancellationToken);
+                RecordEvent(marker, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                var completedNow = completed + 1;
+                CountdownChanged?.Invoke(this,
+                    new BladeCountdownStatus(marker.DisplayName, 0, IsGo: false, IsCompleted: true,
+                        CompletedCount: completedNow, TargetCount: targetCount));
+                Publish(true, $"已完成 {completedNow}/{targetCount} 次，剩余 {targetCount - completedNow} 次");
+                if (completedNow < targetCount)
                 {
-                    break;
+                    await Task.Delay(650, cancellationToken);
                 }
-                await Task.Delay(Math.Min(50, remaining), cancellationToken);
             }
-            SystemSounds.Asterisk.Play();
-            CountdownChanged?.Invoke(this,
-                new BladeCountdownStatus(marker.DisplayName, 0, IsGo: true, IsCompleted: false));
-            await Task.Delay(500, cancellationToken);
-            var markerTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            RecordEvent(marker, markerTime);
-            CountdownChanged?.Invoke(this,
-                new BladeCountdownStatus(marker.DisplayName, 0, IsGo: false, IsCompleted: true));
-            Publish(true, $"倒计时归零后 0.5 秒已标记：{marker.DisplayName}");
+            AutomaticSequenceCompleted?.Invoke(this, EventArgs.Empty);
         }
         catch (OperationCanceledException)
         {

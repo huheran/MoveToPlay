@@ -32,6 +32,8 @@ public partial class TrainingWindow : Window
 
     private readonly Action _pauseTelemetry;
     private readonly Action _resumeTelemetry;
+    private readonly Func<TelemetrySnapshot?>? _getTelemetrySnapshot;
+    private readonly Func<Task>? _refreshTelemetry;
     private readonly ImuCollectionService _collector = new();
     private readonly EventCatalogService _eventCatalog = new();
     private readonly ObservableCollection<TrainingEventOption> _eventOptions = [];
@@ -39,6 +41,10 @@ public partial class TrainingWindow : Window
     private readonly TrainingHistoryService _history = new();
     private readonly CollectionLibraryService _collectionLibrary;
     private readonly FirmwareDeploymentService _firmwareDeployment = new();
+    private readonly System.Windows.Threading.DispatcherTimer _deviceStatusTimer = new()
+    {
+        Interval = TimeSpan.FromMilliseconds(500),
+    };
     private SshTunnelService? _tunnel;
     private CloudTrainingApiClient? _api;
     private CancellationTokenSource? _operationCancellation;
@@ -53,10 +59,16 @@ public partial class TrainingWindow : Window
     private bool _creatingEvent;
     private bool _telemetryPaused;
 
-    public TrainingWindow(Action pauseTelemetry, Action resumeTelemetry)
+    public TrainingWindow(
+        Action pauseTelemetry,
+        Action resumeTelemetry,
+        Func<TelemetrySnapshot?>? getTelemetrySnapshot = null,
+        Func<Task>? refreshTelemetry = null)
     {
         _pauseTelemetry = pauseTelemetry;
         _resumeTelemetry = resumeTelemetry;
+        _getTelemetrySnapshot = getTelemetrySnapshot;
+        _refreshTelemetry = refreshTelemetry;
         _collectionLibrary = new CollectionLibraryService(_eventCatalog);
         InitializeComponent();
         StateLabelSelector.ItemsSource = StateLabels;
@@ -86,12 +98,16 @@ public partial class TrainingWindow : Window
         UpdateCollectorBladeSettings();
         _collector.StatusChanged += Collector_StatusChanged;
         _collector.CountdownChanged += Collector_CountdownChanged;
+        _collector.AutomaticSequenceCompleted += Collector_AutomaticSequenceCompleted;
+        _deviceStatusTimer.Tick += (_, _) => UpdatePrecollectionDeviceStatus();
         Loaded += (_, _) =>
         {
             RefreshPorts();
             RefreshFirmwarePorts();
             RefreshCollectionLibrary();
             LoadCachedResult();
+            _deviceStatusTimer.Start();
+            UpdatePrecollectionDeviceStatus();
         };
         Closed += TrainingWindow_Closed;
     }
@@ -139,7 +155,7 @@ public partial class TrainingWindow : Window
         UpdateCollectionStartEnabled();
     }
 
-    private void StartCollection_Click(object sender, RoutedEventArgs e)
+    private async void StartCollection_Click(object sender, RoutedEventArgs e)
     {
         if (PortSelector.SelectedItem is not string port)
         {
@@ -152,21 +168,31 @@ public partial class TrainingWindow : Window
             MessageBox.Show(this, "请先选择连续状态标签和本次单独动作标签。", "采集设置未完成", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
+        StartCollectionButton.IsEnabled = false;
         try
         {
+            if (!await EnsureAllDevicesOnlineAsync())
+            {
+                UpdateCollectionStartEnabled();
+                return;
+            }
             UpdateCollectorBladeSettings();
-            PauseTelemetry();
+            await ShowPreparationCountdownAsync();
+            await Task.Run(PauseTelemetry);
             _collector.Start(port, CollectionRootText.Text);
-            StartCollectionButton.IsEnabled = false;
             StopCollectionButton.IsEnabled = true;
             PortSelector.IsEnabled = false;
             StateLabelSelector.IsEnabled = false;
             EventSelector.IsEnabled = false;
             BladeModeSelector.IsEnabled = false;
+            BladeCountdownText.IsEnabled = false;
+            BladeTargetCountText.IsEnabled = false;
+            BladeCompensationText.IsEnabled = false;
         }
         catch (Exception exception)
         {
             ResumeTelemetry();
+            UpdateCollectionStartEnabled();
             MessageBox.Show(this, exception.Message, "采集启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
@@ -187,6 +213,9 @@ public partial class TrainingWindow : Window
         StateLabelSelector.IsEnabled = true;
         EventSelector.IsEnabled = true;
         BladeModeSelector.IsEnabled = true;
+        BladeCountdownText.IsEnabled = true;
+        BladeTargetCountText.IsEnabled = true;
+        BladeCompensationText.IsEnabled = true;
         UpdateCollectionStartEnabled();
         if (_collector.SamplesPath is not null && _collector.EventsPath is not null)
         {
@@ -503,6 +532,7 @@ public partial class TrainingWindow : Window
         var selectedEvent = EventSelector?.SelectedItem as TrainingEventOption;
         var mode = (BladeModeSelector?.SelectedItem as BladeMarkingModeOption)?.Mode ?? BladeMarkingMode.Immediate;
         var countdownMs = ParseInt(BladeCountdownText?.Text, 5000);
+        var targetCount = Math.Clamp(ParseInt(BladeTargetCountText?.Text, 30), 1, 500);
         var compensationMs = ParseInt(BladeCompensationText?.Text, 50);
         if (BladeCountdownPanel is not null)
         {
@@ -512,7 +542,17 @@ public partial class TrainingWindow : Window
         {
             BladeCompensationPanel.Visibility = mode == BladeMarkingMode.Immediate ? Visibility.Visible : Visibility.Collapsed;
         }
-        _collector.ConfigureBladeMarker(selectedEvent, mode, countdownMs, compensationMs);
+        if (ManualMarkButton is not null)
+        {
+            ManualMarkButton.Visibility = mode == BladeMarkingMode.Immediate ? Visibility.Visible : Visibility.Collapsed;
+        }
+        if (CollectionModeHelpText is not null)
+        {
+            CollectionModeHelpText.Text = mode == BladeMarkingMode.Countdown
+                ? $"自动完成 {targetCount} 次采集：每次倒计时后记录一次，并显示剩余次数。"
+                : "采集期间按一次 Blade 生成一个所选动作标签；电脑按钮可作备用触发。";
+        }
+        _collector.ConfigureBladeMarker(selectedEvent, mode, countdownMs, compensationMs, targetCount);
     }
 
     private static int ParseInt(string? value, int fallback) =>
@@ -523,8 +563,9 @@ public partial class TrainingWindow : Window
         _ = Dispatcher.BeginInvoke(() =>
         {
             CollectionStatusText.Text = status.Detail;
-            var nodes = status.OnlineNodes.Length == 0 ? "—" : string.Join(", ", status.OnlineNodes);
-            SampleCountText.Text = $"样本 {status.SampleCount:N0} · 事件 {status.EventCount:N0} · 在线节点 {nodes}";
+            SampleCountText.Text =
+                $"样本 {status.SampleCount:N0} · 事件 {status.EventCount:N0} · " +
+                $"Tracker {status.OnlineNodes.Length}/4 · Blade {(status.BladeOnline ? "在线" : "离线")}";
             if (!status.Running && StopCollectionButton.IsEnabled)
             {
                 StopCollection();
@@ -548,7 +589,8 @@ public partial class TrainingWindow : Window
                 _countdownWindow.Show();
             }
             _countdownWindow.UpdateStatus(status);
-            if (status.IsCompleted)
+            if (status.IsCompleted &&
+                (status.TargetCount <= 0 || status.CompletedCount >= status.TargetCount))
             {
                 var completedWindow = _countdownWindow;
                 await Task.Delay(450);
@@ -558,6 +600,101 @@ public partial class TrainingWindow : Window
                     _countdownWindow = null;
                 }
             }
+        });
+    }
+
+    private async Task<bool> EnsureAllDevicesOnlineAsync()
+    {
+        var snapshot = _getTelemetrySnapshot?.Invoke();
+        if (snapshot is null && _refreshTelemetry is not null)
+        {
+            CollectionStatusText.Text = "正在刷新 Dongle、Tracker 和 Blade 在线状态……";
+            await _refreshTelemetry();
+            snapshot = _getTelemetrySnapshot?.Invoke();
+        }
+        if (_getTelemetrySnapshot is null)
+        {
+            return true;
+        }
+        if (snapshot is null)
+        {
+            MessageBox.Show(this, "没有收到 Dongle 的最新设备状态，请确认 Dongle 已进入橙灯采集态并点击“刷新设备状态”。",
+                "无法开始采集", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
+        }
+        if (snapshot.TrackerOnline < 4 || !snapshot.BladeOnline)
+        {
+            MessageBox.Show(this,
+                $"设备未全部在线：Tracker {snapshot.TrackerOnline}/4，Blade {(snapshot.BladeOnline ? "在线" : "离线")}。\n请打开所有节点和 Blade 后刷新状态。",
+                "无法开始采集", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
+        }
+        return true;
+    }
+
+    private async Task ShowPreparationCountdownAsync()
+    {
+        _countdownWindow?.Close();
+        _countdownWindow = new CollectionCountdownWindow { Owner = this };
+        _countdownWindow.Show();
+        for (var remaining = 2000; remaining > 0; remaining -= 1000)
+        {
+            _countdownWindow.UpdateStatus(new BladeCountdownStatus(
+                "准备开始采集", remaining, IsGo: false, IsCompleted: false, IsPreparation: true));
+            CollectionStatusText.Text = $"{remaining / 1000} 秒后开始采集，请做好准备";
+            await Task.Delay(1000);
+        }
+        _countdownWindow.UpdateStatus(new BladeCountdownStatus(
+            "准备开始采集", 0, IsGo: true, IsCompleted: false, IsPreparation: true));
+        await Task.Delay(350);
+        _countdownWindow.Close();
+        _countdownWindow = null;
+    }
+
+    private async void RefreshCollectionStatus_Click(object sender, RoutedEventArgs e)
+    {
+        if (_collector.IsRunning)
+        {
+            _collector.RefreshStatus();
+            return;
+        }
+        CollectionStatusText.Text = "正在刷新设备状态……";
+        if (_refreshTelemetry is not null)
+        {
+            await _refreshTelemetry();
+        }
+        var snapshot = _getTelemetrySnapshot?.Invoke();
+        CollectionStatusText.Text = snapshot is null
+            ? "尚未收到状态，请确认 Dongle 串口和运行模式"
+            : $"Tracker {snapshot.TrackerOnline}/4 · Blade {(snapshot.BladeOnline ? "在线" : "离线")}";
+        if (snapshot is not null)
+        {
+            SampleCountText.Text = $"样本 0 · 事件 0 · Tracker {snapshot.TrackerOnline}/4 · Blade {(snapshot.BladeOnline ? "在线" : "离线")}";
+        }
+    }
+
+    private void UpdatePrecollectionDeviceStatus()
+    {
+        if (_collector.IsRunning)
+        {
+            return;
+        }
+        var snapshot = _getTelemetrySnapshot?.Invoke();
+        if (snapshot is null)
+        {
+            return;
+        }
+        SampleCountText.Text =
+            $"样本 0 · 事件 0 · Tracker {snapshot.TrackerOnline}/4 · " +
+            $"Blade {(snapshot.BladeOnline ? "在线" : "离线")}";
+    }
+
+    private void Collector_AutomaticSequenceCompleted(object? sender, EventArgs e)
+    {
+        _ = Dispatcher.BeginInvoke(() =>
+        {
+            CollectionStatusText.Text = "计划次数已经全部完成，正在停止并保存";
+            StopCollection();
         });
     }
 
@@ -1086,10 +1223,12 @@ public partial class TrainingWindow : Window
     private void TrainingWindow_Closed(object? sender, EventArgs e)
     {
         _operationCancellation?.Cancel();
+        _deviceStatusTimer.Stop();
         _firmwareCancellation?.Cancel();
         _firmwareCancellation?.Dispose();
         _collector.StatusChanged -= Collector_StatusChanged;
         _collector.CountdownChanged -= Collector_CountdownChanged;
+        _collector.AutomaticSequenceCompleted -= Collector_AutomaticSequenceCompleted;
         _collector.Dispose();
         _countdownWindow?.Close();
         ResumeTelemetry();

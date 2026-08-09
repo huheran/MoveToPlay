@@ -119,10 +119,19 @@
                                     <TextBlock Margin="0,10,0,6" Foreground="#FF93A3B8" Text="Blade 标记方式" />
                                     <ComboBox x:Name="BladeModeSelector" SelectionChanged="BladeModeSelector_SelectionChanged" />
                                     <StackPanel x:Name="BladeCountdownPanel" Margin="0,10,0,0" Visibility="Collapsed">
-                                        <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="倒计时（毫秒，默认 5000）" />
-                                        <TextBox x:Name="BladeCountdownText" Text="5000" LostFocus="BladeSettings_Changed" />
+                                        <Grid>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="16" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="每次固定倒计时（毫秒）" />
+                                                <TextBox x:Name="BladeCountdownText" IsReadOnly="True" Text="5000" />
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="2">
+                                                <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="计划采集次数" />
+                                                <TextBox x:Name="BladeTargetCountText" Text="30" LostFocus="BladeSettings_Changed" />
+                                            </StackPanel>
+                                        </Grid>
                                         <TextBlock Margin="0,6,0,0" FontSize="10" Foreground="#FF8291A7"
-                                                   Text="归零时大字提醒开始动作，0.5 秒后写入动作标签。" />
+                                                   Text="开始采集后自动循环，无需按 Blade；每次归零后 0.5 秒写入标签。" />
                                     </StackPanel>
                                     <StackPanel x:Name="BladeCompensationPanel" Margin="0,10,0,0">
                                         <TextBlock Margin="0,0,0,6" Foreground="#FF93A3B8" Text="即时延迟补偿（毫秒）" />
@@ -148,7 +157,7 @@
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                     <StackPanel>
                                         <TextBlock FontSize="15" FontWeight="SemiBold" Text="5　开始采集" />
-                                        <TextBlock Margin="0,5,0,0" Foreground="#FF9BE7DB" TextWrapping="Wrap"
+                                        <TextBlock x:Name="CollectionModeHelpText" Margin="0,5,0,0" Foreground="#FF9BE7DB" TextWrapping="Wrap"
                                                    Text="采集期间按一次 Blade 生成一个所选动作标签；电脑按钮可作备用触发。" />
                                     </StackPanel>
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
@@ -156,7 +165,7 @@
                                                 IsEnabled="False" Content="开始采集" Click="StartCollection_Click" />
                                         <Button x:Name="StopCollectionButton" MinHeight="44" IsEnabled="False"
                                                 Content="停止并保存" Click="StopCollection_Click" />
-                                        <Button MinHeight="44" Content="电脑按钮触发一次" Click="MarkSelectedEvent_Click" />
+                                        <Button x:Name="ManualMarkButton" MinHeight="44" Content="电脑按钮触发一次" Click="MarkSelectedEvent_Click" />
                                     </StackPanel>
                                 </Grid>
                             </Border>
@@ -164,8 +173,12 @@
                             <Border Margin="0,10,0,0" Padding="13" Background="#FF0A111C" CornerRadius="10">
                                 <StackPanel>
                                     <TextBlock x:Name="CollectionStatusText" Text="请按顺序完成采集设置" TextWrapping="Wrap" />
-                                    <TextBlock x:Name="SampleCountText" Margin="0,7,0,0" FontFamily="Consolas"
-                                               Foreground="#FF2DD4BF" Text="样本 0 · 节点 —" />
+                                    <Grid Margin="0,7,0,0">
+                                        <TextBlock x:Name="SampleCountText" VerticalAlignment="Center" FontFamily="Consolas"
+                                                   Foreground="#FF2DD4BF" Text="样本 0 · Tracker 0/4 · Blade 离线" />
+                                        <Button HorizontalAlignment="Right" Padding="10,3" Content="刷新设备状态"
+                                                Click="RefreshCollectionStatus_Click" />
+                                    </Grid>
                                     <TextBlock x:Name="CollectionFilesText" Margin="0,7,0,0" FontSize="10"
                                                Foreground="#FF718096" Text="尚未生成文件" TextWrapping="Wrap" />
                                 </StackPanel>

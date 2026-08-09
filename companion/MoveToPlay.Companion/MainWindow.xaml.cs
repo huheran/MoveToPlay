@@ -85,6 +85,10 @@ public partial class MainWindow : Window
     private bool _exitRequested;
     private bool _trayTipShown;
     private bool _updatingPlacementControls;
+    private TelemetrySnapshot? _latestTelemetrySnapshot;
+    private DateTimeOffset _latestTelemetrySnapshotAt;
+    private bool _telemetryRefreshRunning;
+    private volatile bool _telemetrySuspendedForCollection;
     private OverlayPlacement _currentOverlayPlacement = new();
     private string? _pendingPlacementProfileId;
     private string _currentResolutionKey = "auto";
@@ -322,6 +326,8 @@ public partial class MainWindow : Window
         }
 
         _viewModel.ApplySnapshot(snapshot);
+        _latestTelemetrySnapshot = snapshot;
+        _latestTelemetrySnapshotAt = DateTimeOffset.UtcNow;
         if (ProfileSelector.SelectedItem is GameProfile profile)
         {
             if (snapshot.Celebrate && profile.Encouragements.Length > 0)
@@ -631,12 +637,61 @@ public partial class MainWindow : Window
             _trainingWindow.Activate();
             return;
         }
-        _trainingWindow = new TrainingWindow(_telemetrySource.Stop, _telemetrySource.Start)
+        _trainingWindow = new TrainingWindow(
+            PauseTelemetryForCollection,
+            ResumeTelemetryAfterCollection,
+            GetFreshTelemetrySnapshot,
+            RefreshTelemetryAsync)
         {
             Owner = this,
         };
         _trainingWindow.Closed += (_, _) => _trainingWindow = null;
         _trainingWindow.Show();
+    }
+
+    private TelemetrySnapshot? GetFreshTelemetrySnapshot() =>
+        DateTimeOffset.UtcNow - _latestTelemetrySnapshotAt <= TimeSpan.FromSeconds(2.5)
+            ? _latestTelemetrySnapshot
+            : null;
+
+    private async void RefreshDeviceStatus_Click(object sender, RoutedEventArgs e) =>
+        await RefreshTelemetryAsync();
+
+    private async Task RefreshTelemetryAsync()
+    {
+        if (_telemetryRefreshRunning || _telemetrySuspendedForCollection)
+        {
+            return;
+        }
+        _telemetryRefreshRunning = true;
+        try
+        {
+            _latestTelemetrySnapshot = null;
+            _latestTelemetrySnapshotAt = default;
+            await Task.Run(_telemetrySource.Stop);
+            _telemetrySource.Start();
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(3);
+            while (_latestTelemetrySnapshot is null && DateTimeOffset.UtcNow < deadline)
+            {
+                await Task.Delay(100);
+            }
+        }
+        finally
+        {
+            _telemetryRefreshRunning = false;
+        }
+    }
+
+    private void PauseTelemetryForCollection()
+    {
+        _telemetrySuspendedForCollection = true;
+        _telemetrySource.Stop();
+    }
+
+    private void ResumeTelemetryAfterCollection()
+    {
+        _telemetrySuspendedForCollection = false;
+        _telemetrySource.Start();
     }
 
     private void ToggleOverlay()
