@@ -420,7 +420,7 @@
                             </StackPanel>
                         </Border>
 
-                        <Border Margin="0,14,0,0" Style="{StaticResource PanelStyle}">
+                        <Border Margin="0,14,0,0" Style="{StaticResource PanelStyle}" Visibility="Collapsed">
                             <StackPanel>
                                 <TextBlock FontSize="13" FontWeight="SemiBold" Foreground="#FFF1F5F9" Text="悬浮层控制" />
                                 <TextBlock Margin="0,5,0,0" FontSize="10" Foreground="#FF68778D"
@@ -697,7 +697,7 @@
                                 </StackPanel>
                                 <TextBlock Margin="0,18,18,0" MaxWidth="520" FontSize="12" LineHeight="21"
                                            Foreground="#FFC7D2E2" TextWrapping="Wrap"
-                                           Text="主窗口不再模拟游戏画面。开启后，悬浮信息会直接显示在目标游戏所在的整个屏幕上；关闭后完全隐藏。" />
+                                           Text="点击右侧按钮打开独立控制窗。拖动位置或调整文字大小时，效果会直接实时显示在目标游戏所在的整个屏幕上。" />
                             </StackPanel>
                             <StackPanel Grid.Column="1" Width="150" VerticalAlignment="Center">
                                 <Border Padding="10,7" Background="#152DD4BF" CornerRadius="999">
@@ -709,8 +709,8 @@
                                     </StackPanel>
                                 </Border>
                                 <Button x:Name="DashboardOverlayButton" Margin="0,12,0,0"
-                                        Style="{StaticResource PrimaryButton}" Content="显示到游戏屏幕"
-                                        Click="ToggleOverlayButton_Click" />
+                                        Style="{StaticResource PrimaryButton}" Content="打开悬浮层控制"
+                                        Click="OpenOverlayControlWindow_Click" />
                             </StackPanel>
                         </Grid>
                     </Border>
@@ -729,8 +729,8 @@
                                 <TextBlock HorizontalAlignment="Right" FontSize="10" Foreground="#FF7F8CA3"
                                            Text="设置会自动保存" />
                             </Grid>
-                            <UniformGrid Grid.Row="1" Margin="0,18,0,14" Columns="3">
-                                <StackPanel Margin="0,0,14,0">
+                            <UniformGrid Grid.Row="1" Margin="0,18,0,14" Columns="4">
+                                <StackPanel Margin="0,0,10,0">
                                     <Border Width="30" Height="30" HorizontalAlignment="Left"
                                             Background="#24F4D38A" CornerRadius="9">
                                         <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
@@ -741,27 +741,38 @@
                                     <TextBlock Margin="0,5,0,0" FontSize="10" LineHeight="17" Foreground="#FF8391A6"
                                                TextWrapping="Wrap" Text="选择主题和目标游戏窗口" />
                                 </StackPanel>
-                                <StackPanel Margin="7,0">
+                                <StackPanel Margin="4,0">
                                     <Border Width="30" Height="30" HorizontalAlignment="Left"
                                             Background="#242DD4BF" CornerRadius="9">
                                         <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
                                                    FontWeight="Bold" Foreground="#FF5EEAD4" Text="2" />
                                     </Border>
                                     <TextBlock Margin="0,10,0,0" FontSize="12" FontWeight="SemiBold"
-                                               Foreground="#FFE8EEF7" Text="调整位置" />
+                                               Foreground="#FFE8EEF7" Text="打开控制窗" />
                                     <TextBlock Margin="0,5,0,0" FontSize="10" LineHeight="17" Foreground="#FF8391A6"
-                                               TextWrapping="Wrap" Text="设置锚点与水平、垂直偏移" />
+                                               TextWrapping="Wrap" Text="自动显示真实悬浮效果" />
                                 </StackPanel>
-                                <StackPanel Margin="14,0,0,0">
+                                <StackPanel Margin="8,0,4,0">
                                     <Border Width="30" Height="30" HorizontalAlignment="Left"
                                             Background="#2480D9FF" CornerRadius="9">
                                         <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
                                                    FontWeight="Bold" Foreground="#FF80D9FF" Text="3" />
                                     </Border>
                                     <TextBlock Margin="0,10,0,0" FontSize="12" FontWeight="SemiBold"
-                                               Foreground="#FFE8EEF7" Text="开启悬浮层" />
+                                               Foreground="#FFE8EEF7" Text="实时调位置" />
                                     <TextBlock Margin="0,5,0,0" FontSize="10" LineHeight="17" Foreground="#FF8391A6"
-                                               TextWrapping="Wrap" Text="效果直接出现在真实游戏屏幕" />
+                                               TextWrapping="Wrap" Text="拖动水平、垂直位置" />
+                                </StackPanel>
+                                <StackPanel Margin="10,0,0,0">
+                                    <Border Width="30" Height="30" HorizontalAlignment="Left"
+                                            Background="#24C084FC" CornerRadius="9">
+                                        <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                   FontWeight="Bold" Foreground="#FFBAE6FD" Text="4" />
+                                    </Border>
+                                    <TextBlock Margin="0,10,0,0" FontSize="12" FontWeight="SemiBold"
+                                               Foreground="#FFE8EEF7" Text="调整文字" />
+                                    <TextBlock Margin="0,5,0,0" FontSize="10" LineHeight="17" Foreground="#FF8391A6"
+                                               TextWrapping="Wrap" Text="分别缩放五组信息" />
                                 </StackPanel>
                             </UniformGrid>
                             <Border Grid.Row="2" Padding="12,9" Background="#FF111A29" CornerRadius="10">

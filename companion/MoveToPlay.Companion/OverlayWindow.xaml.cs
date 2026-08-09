@@ -66,6 +66,17 @@ public partial class OverlayWindow : Window
             _ => VerticalAlignment.Top,
         };
         OverlayCard.RenderTransform = new TranslateTransform(placement.OffsetX, placement.OffsetY);
+        HeaderTextGroup.LayoutTransform = Scale(placement.HeaderScale);
+        ActionTextGroup.LayoutTransform = Scale(placement.ActionScale);
+        MetricsTextGroup.LayoutTransform = Scale(placement.MetricsScale);
+        GoalTextGroup.LayoutTransform = Scale(placement.GoalScale);
+        EncouragementToast.LayoutTransform = Scale(placement.ToastScale);
+    }
+
+    private static ScaleTransform Scale(double value)
+    {
+        var safeValue = Math.Clamp(value, 0.6, 1.8);
+        return new ScaleTransform(safeValue, safeValue);
     }
 
     public void RefreshPosition()

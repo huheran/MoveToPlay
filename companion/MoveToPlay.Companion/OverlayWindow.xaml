@@ -43,7 +43,7 @@
                     <DropShadowEffect BlurRadius="6" Direction="0" Opacity="0.82" ShadowDepth="0" Color="#FF000000" />
                 </StackPanel.Effect>
 
-                <Grid>
+                <Grid x:Name="HeaderTextGroup">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -63,7 +63,7 @@
                     </StackPanel>
                 </Grid>
 
-                <Grid Margin="0,18,0,0">
+                <Grid x:Name="ActionTextGroup" Margin="0,18,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -84,7 +84,7 @@
                                            Stroke="#FF000000" StrokeThickness="2.0" Text="{Binding MarkerGlyph}" />
                 </Grid>
 
-                <Grid Margin="0,18,0,0">
+                <Grid x:Name="MetricsTextGroup" Margin="0,18,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="*" />
@@ -126,7 +126,7 @@
                     </StackPanel>
                 </Grid>
 
-                <StackPanel Margin="0,17,4,0">
+                <StackPanel x:Name="GoalTextGroup" Margin="0,17,4,0">
                     <Grid>
                         <controls:OutlinedText FontFamily="{Binding HudFontFamily}" FontSize="11" FontWeight="SemiBold"
                                                Foreground="#FFFFFFFF" Stroke="#FF000000" StrokeThickness="1.45"
