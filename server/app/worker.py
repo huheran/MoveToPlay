@@ -312,8 +312,7 @@ def run_firmware_job(settings: Settings, database: Database, job: dict[str, Any]
 
     def update(_stage: str, detail: str, percent: float) -> None:
         # 固件有独立进度，训练完成后的 UI 不再混入上一份模型内容。
-        mapped = max(2.0, min(99.0, (percent - 90.0) * 9.7 + 2.0))
-        database.update_firmware_progress(job["id"], detail, mapped)
+        database.update_firmware_progress(job["id"], detail, percent)
 
     try:
         build_dongle_firmware(PROJECT_ROOT, run_dir, job["id"], update)

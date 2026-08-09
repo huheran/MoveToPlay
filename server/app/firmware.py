@@ -32,6 +32,7 @@ PROJECT_FILES = (
 BOARD_PROFILE_PATTERN = re.compile(
     r"^#define\s+M2P_BOARD_PROFILE\s+\d+\s*$", re.MULTILINE
 )
+NINJA_PROGRESS_PATTERN = re.compile(r"\[(\d+)\s*/\s*(\d+)\]")
 ProgressCallback = Callable[[str, str, float], None]
 
 
@@ -146,7 +147,7 @@ def build_dongle_firmware(
         workspace = Path(temporary) / "project"
         workspace.mkdir()
         if progress:
-            progress("firmware_preparing", "正在集成模型 C 数组并准备 Dongle 源码", 92)
+            progress("firmware_preparing", "正在集成模型 C 数组并准备 Dongle 源码", 5)
         _copy_firmware_project(project_root, workspace, generated)
         build_dir = workspace / "build-dongle"
         command = [
@@ -160,20 +161,39 @@ def build_dongle_firmware(
             "build",
         ]
         if progress:
-            progress("firmware_building", "云端正在编译完整 Dongle 固件", 94)
+            progress("firmware_building", "云端正在编译完整 Dongle 固件", 10)
         with log_path.open("w", encoding="utf-8", newline="\n") as log:
-            process = subprocess.run(
+            process = subprocess.Popen(
                 command,
                 cwd=workspace,
-                stdout=log,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                check=False,
             )
+            assert process.stdout is not None
+            last_percent = 10.0
+            for line in process.stdout:
+                log.write(line)
+                match = NINJA_PROGRESS_PATTERN.search(line)
+                if not match or not progress:
+                    continue
+                completed = int(match.group(1))
+                total = int(match.group(2))
+                if total <= 0:
+                    continue
+                percent = 10.0 + min(1.0, completed / total) * 84.0
+                if percent >= last_percent + 1.0:
+                    last_percent = percent
+                    progress(
+                        "firmware_building",
+                        f"云端正在编译完整 Dongle 固件（{completed}/{total}）",
+                        percent,
+                    )
+            process.wait()
         if process.returncode != 0:
             raise RuntimeError(f"cloud firmware build failed with code {process.returncode}")
         if progress:
-            progress("firmware_packaging", "正在校验并打包可烧录固件", 98)
+            progress("firmware_packaging", "正在校验并打包可烧录固件", 96)
         return _package_build(job_id, build_dir, firmware_dir)
