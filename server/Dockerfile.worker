@@ -14,7 +14,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_ROOT_USER_ACTION=ignore \
     HOME=/tmp/movetoplay-worker \
     IDF_PATH=/opt/esp/idf \
-    IDF_TOOLS_PATH=/opt/esp/tools
+    IDF_TOOLS_PATH=/opt/esp/tools \
+    IDF_GITHUB_ASSETS=dl.espressif.cn/github_assets
 
 WORKDIR /workspace
 
@@ -27,16 +28,18 @@ RUN sed -i \
     && apt-get install --yes --no-install-recommends \
         bison ca-certificates ccache cmake curl dfu-util flex g++ gcc git gperf \
         libffi-dev libssl-dev libusb-1.0-0 make ninja-build unzip \
-    && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /opt/esp \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /opt/esp \
     && curl --fail --location --retry 5 \
         https://dl.espressif.com/github_assets/espressif/esp-idf/releases/download/v5.5.2/esp-idf-v5.5.2.zip \
         --output /tmp/esp-idf.zip \
     && echo "2c7b0f38185a74eac04f1a7c7e09786cac5e271f76ffc4e672c2e5735e626e1d  /tmp/esp-idf.zip" | sha256sum --check --strict \
     && unzip -q /tmp/esp-idf.zip -d /opt/esp \
     && mv /opt/esp/esp-idf-v5.5.2 /opt/esp/idf \
-    && rm /tmp/esp-idf.zip \
-    && /opt/esp/idf/install.sh esp32s3 \
+    && rm /tmp/esp-idf.zip
+
+RUN /opt/esp/idf/install.sh esp32s3 \
     && /bin/bash -c 'source /opt/esp/idf/export.sh && python -m pip install --no-cache-dir --requirement /tmp/movetoplay-training-requirements.txt' \
     && mkdir -p /tmp/movetoplay-worker \
     && chown -R 1000:1000 /tmp/movetoplay-worker
