@@ -3,9 +3,9 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:controls="clr-namespace:MoveToPlay.Companion.Controls"
         Title="MoveToPlay Companion"
-        Width="1180"
+        Width="1040"
         Height="760"
-        MinWidth="1080"
+        MinWidth="940"
         MinHeight="700"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
@@ -350,8 +350,14 @@
                                         <TextBlock Margin="0,3,0,0" FontSize="10" Foreground="#FF7F8CA3" Text="SIGNAL" />
                                     </StackPanel>
                                 </Grid>
-                                <TextBlock Margin="0,15,0,0" FontSize="11" Foreground="#FF7F8CA3" TextWrapping="Wrap"
+                                <TextBlock Margin="0,15,0,0" FontSize="11" Foreground="#FF9DACBF" TextWrapping="Wrap"
                                            Text="{Binding ConnectionDetail}" />
+                                <StackPanel Margin="0,7,0,0" Orientation="Horizontal">
+                                    <Ellipse Width="6" Height="6" Margin="0,0,6,0" VerticalAlignment="Center"
+                                             Fill="#FF5EEAD4" />
+                                    <TextBlock FontSize="9" Foreground="#FF73839A"
+                                               Text="每秒自动更新 · 数据中断时自动重连" />
+                                </StackPanel>
                                 <TextBlock Margin="0,13,0,7" FontSize="10" Foreground="#FF7F8CA3" Text="设备电量" />
                                 <UniformGrid Columns="5">
                                     <StackPanel>
@@ -387,11 +393,11 @@
                                 </UniformGrid>
                                 <Grid Margin="0,16,0,0">
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="92" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <Button Height="34" Padding="12,0" Style="{StaticResource GhostButton}"
-                                            Content="刷新状态" Click="RefreshDeviceStatus_Click" />
+                                    <Button Height="34" Padding="10,0" Style="{StaticResource GhostButton}"
+                                            Content="立即刷新" Click="RefreshDeviceStatus_Click" />
                                     <Button Grid.Column="1" Margin="8,0,0,0" Height="34" Style="{StaticResource GhostButton}"
                                             Content="数据采集与云端训练" Click="OpenTrainingWindow_Click" />
                                 </Grid>
@@ -409,7 +415,7 @@
                                             Foreground="{Binding AccentBrush}" FontSize="10" Content="刷新列表" Click="RefreshWindowsButton_Click" />
                                 </Grid>
                                 <ComboBox x:Name="WindowSelector" SelectionChanged="WindowSelector_SelectionChanged" />
-                                <CheckBox x:Name="FollowGameCheckBox" IsChecked="True" Content="悬浮层跟随游戏窗口" Checked="OverlayOptionChanged" Unchecked="OverlayOptionChanged" />
+                                <CheckBox x:Name="FollowGameCheckBox" IsChecked="True" Content="显示在目标游戏所在屏幕" Checked="OverlayOptionChanged" Unchecked="OverlayOptionChanged" />
                                 <CheckBox x:Name="HideInactiveCheckBox" IsChecked="True" Content="切出游戏时自动隐藏" Checked="OverlayOptionChanged" Unchecked="OverlayOptionChanged" />
                             </StackPanel>
                         </Border>
@@ -419,7 +425,7 @@
                                 <TextBlock FontSize="13" FontWeight="SemiBold" Foreground="#FFF1F5F9" Text="悬浮层控制" />
                                 <TextBlock Margin="0,5,0,0" FontSize="10" Foreground="#FF68778D"
                                            Text="当前位置按游戏主题独立保存" />
-                                <TextBlock Margin="0,13,0,6" FontSize="10" Foreground="#FF7F8CA3" Text="预览 / 适配分辨率" />
+                                <TextBlock Margin="0,13,0,6" FontSize="10" Foreground="#FF7F8CA3" Text="屏幕 / 适配分辨率" />
                                 <ComboBox x:Name="OverlayResolutionSelector"
                                           SelectionChanged="OverlayResolutionSelector_SelectionChanged" />
                                 <TextBlock Margin="0,13,0,6" FontSize="10" Foreground="#FF7F8CA3" Text="位置锚点" />
@@ -479,7 +485,7 @@
                     </StackPanel>
                 </ScrollViewer>
 
-                <Grid Grid.Column="2">
+                <Grid Grid.Column="2" Visibility="Collapsed">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="*" />
                         <RowDefinition Height="14" />
@@ -658,6 +664,152 @@
                             </StackPanel>
                         </Border>
                     </Grid>
+                </Grid>
+
+                <Grid Grid.Column="2">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="188" />
+                        <RowDefinition Height="14" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="14" />
+                        <RowDefinition Height="154" />
+                    </Grid.RowDefinitions>
+
+                    <Border Grid.Row="0" Padding="24" Background="#FF111724"
+                            BorderBrush="#FF263249" BorderThickness="1" CornerRadius="20">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal">
+                                    <Border Width="34" Height="34" Background="#24F4D38A" CornerRadius="10">
+                                        <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                   FontSize="17" Foreground="{Binding AccentBrush}" Text="◎" />
+                                    </Border>
+                                    <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                                        <TextBlock FontSize="16" FontWeight="Bold" Foreground="#FFF8FAFC"
+                                                   Text="全屏游戏悬浮层" />
+                                        <TextBlock Margin="0,3,0,0" FontSize="11" Foreground="#FF93A3B8"
+                                                   Text="透明置顶 · 鼠标穿透 · 不占用游戏输入" />
+                                    </StackPanel>
+                                </StackPanel>
+                                <TextBlock Margin="0,18,18,0" MaxWidth="520" FontSize="12" LineHeight="21"
+                                           Foreground="#FFC7D2E2" TextWrapping="Wrap"
+                                           Text="主窗口不再模拟游戏画面。开启后，悬浮信息会直接显示在目标游戏所在的整个屏幕上；关闭后完全隐藏。" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Width="150" VerticalAlignment="Center">
+                                <Border Padding="10,7" Background="#152DD4BF" CornerRadius="999">
+                                    <StackPanel HorizontalAlignment="Center" Orientation="Horizontal">
+                                        <Ellipse Width="7" Height="7" Margin="0,0,7,0"
+                                                 Fill="{Binding ConnectionStatusBrush}" />
+                                        <TextBlock x:Name="OverlayStateText" FontSize="10" FontWeight="SemiBold"
+                                                   Foreground="#FFD9E5F3" Text="当前未显示" />
+                                    </StackPanel>
+                                </Border>
+                                <Button x:Name="DashboardOverlayButton" Margin="0,12,0,0"
+                                        Style="{StaticResource PrimaryButton}" Content="显示到游戏屏幕"
+                                        Click="ToggleOverlayButton_Click" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="2" Padding="22" Background="#FF0E1522"
+                            BorderBrush="#FF202B3E" BorderThickness="1" CornerRadius="20">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid>
+                                <TextBlock FontSize="14" FontWeight="SemiBold" Foreground="#FFF1F5F9"
+                                           Text="使用流程" />
+                                <TextBlock HorizontalAlignment="Right" FontSize="10" Foreground="#FF7F8CA3"
+                                           Text="设置会自动保存" />
+                            </Grid>
+                            <UniformGrid Grid.Row="1" Margin="0,18,0,14" Columns="3">
+                                <StackPanel Margin="0,0,14,0">
+                                    <Border Width="30" Height="30" HorizontalAlignment="Left"
+                                            Background="#24F4D38A" CornerRadius="9">
+                                        <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                   FontWeight="Bold" Foreground="{Binding AccentBrush}" Text="1" />
+                                    </Border>
+                                    <TextBlock Margin="0,10,0,0" FontSize="12" FontWeight="SemiBold"
+                                               Foreground="#FFE8EEF7" Text="选择游戏" />
+                                    <TextBlock Margin="0,5,0,0" FontSize="10" LineHeight="17" Foreground="#FF8391A6"
+                                               TextWrapping="Wrap" Text="选择主题和目标游戏窗口" />
+                                </StackPanel>
+                                <StackPanel Margin="7,0">
+                                    <Border Width="30" Height="30" HorizontalAlignment="Left"
+                                            Background="#242DD4BF" CornerRadius="9">
+                                        <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                   FontWeight="Bold" Foreground="#FF5EEAD4" Text="2" />
+                                    </Border>
+                                    <TextBlock Margin="0,10,0,0" FontSize="12" FontWeight="SemiBold"
+                                               Foreground="#FFE8EEF7" Text="调整位置" />
+                                    <TextBlock Margin="0,5,0,0" FontSize="10" LineHeight="17" Foreground="#FF8391A6"
+                                               TextWrapping="Wrap" Text="设置锚点与水平、垂直偏移" />
+                                </StackPanel>
+                                <StackPanel Margin="14,0,0,0">
+                                    <Border Width="30" Height="30" HorizontalAlignment="Left"
+                                            Background="#2480D9FF" CornerRadius="9">
+                                        <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                   FontWeight="Bold" Foreground="#FF80D9FF" Text="3" />
+                                    </Border>
+                                    <TextBlock Margin="0,10,0,0" FontSize="12" FontWeight="SemiBold"
+                                               Foreground="#FFE8EEF7" Text="开启悬浮层" />
+                                    <TextBlock Margin="0,5,0,0" FontSize="10" LineHeight="17" Foreground="#FF8391A6"
+                                               TextWrapping="Wrap" Text="效果直接出现在真实游戏屏幕" />
+                                </StackPanel>
+                            </UniformGrid>
+                            <Border Grid.Row="2" Padding="12,9" Background="#FF111A29" CornerRadius="10">
+                                <Grid>
+                                    <TextBlock FontFamily="Consolas" FontSize="10" Foreground="#FFAAB8CA"
+                                               Text="CTRL + SHIFT + F10" />
+                                    <TextBlock HorizontalAlignment="Right" FontSize="10" Foreground="#FF718198"
+                                               Text="随时显示 / 隐藏悬浮层" />
+                                </Grid>
+                            </Border>
+                        </Grid>
+                    </Border>
+
+                    <UniformGrid Grid.Row="4" Columns="3">
+                        <Border Margin="0,0,8,0" Padding="17" Background="#FF111724"
+                                BorderBrush="#FF202A3B" BorderThickness="1" CornerRadius="16">
+                            <StackPanel>
+                                <Border Width="34" Height="4" HorizontalAlignment="Left" Background="#FFFF7690" CornerRadius="2" />
+                                <TextBlock Margin="0,13,0,0" FontSize="10" Foreground="#FF8D9BB0" Text="运动后心率" />
+                                <StackPanel Margin="0,7,0,0" Orientation="Horizontal">
+                                    <TextBlock FontSize="28" FontWeight="Bold" Foreground="#FFF8FAFC" Text="{Binding HeartRate}" />
+                                    <TextBlock Margin="5,11,0,0" FontSize="9" Foreground="#FF8D9BB0" Text="BPM" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                        <Border Margin="4,0" Padding="17" Background="#FF111724"
+                                BorderBrush="#FF202A3B" BorderThickness="1" CornerRadius="16">
+                            <StackPanel>
+                                <Border Width="34" Height="4" HorizontalAlignment="Left" Background="{Binding AccentBrush}" CornerRadius="2" />
+                                <TextBlock Margin="0,13,0,0" FontSize="10" Foreground="#FF8D9BB0" Text="估算消耗" />
+                                <StackPanel Margin="0,7,0,0" Orientation="Horizontal">
+                                    <TextBlock FontSize="28" FontWeight="Bold" Foreground="#FFF8FAFC" Text="{Binding Calories}" />
+                                    <TextBlock Margin="5,11,0,0" FontSize="9" Foreground="#FF8D9BB0" Text="KCAL" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                        <Border Margin="8,0,0,0" Padding="17" Background="#FF111724"
+                                BorderBrush="#FF202A3B" BorderThickness="1" CornerRadius="16">
+                            <StackPanel>
+                                <Border Width="34" Height="4" HorizontalAlignment="Left" Background="{Binding AccentSecondaryBrush}" CornerRadius="2" />
+                                <TextBlock Margin="0,13,0,0" FontSize="10" Foreground="#FF8D9BB0" Text="连续动作" />
+                                <StackPanel Margin="0,7,0,0" Orientation="Horizontal">
+                                    <TextBlock FontSize="28" FontWeight="Bold" Foreground="#FFF8FAFC" Text="{Binding Combo}" />
+                                    <TextBlock Margin="5,11,0,0" FontSize="9" Foreground="#FF8D9BB0" Text="COMBO" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                    </UniformGrid>
                 </Grid>
             </Grid>
         </Grid>

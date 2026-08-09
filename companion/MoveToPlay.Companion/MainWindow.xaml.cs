@@ -75,6 +75,10 @@ public partial class MainWindow : Window
     {
         Interval = TimeSpan.FromMilliseconds(350),
     };
+    private readonly DispatcherTimer _deviceWatchTimer = new()
+    {
+        Interval = TimeSpan.FromSeconds(1),
+    };
     private IReadOnlyList<GameProfile> _profiles = [];
     private IReadOnlyList<GameWindowTarget> _windowTargets = [];
     private OverlayWindow? _overlayWindow;
@@ -87,6 +91,8 @@ public partial class MainWindow : Window
     private bool _updatingPlacementControls;
     private TelemetrySnapshot? _latestTelemetrySnapshot;
     private DateTimeOffset _latestTelemetrySnapshotAt;
+    private DateTimeOffset _telemetryStartedAt;
+    private DateTimeOffset _lastAutomaticRefreshAt;
     private bool _telemetryRefreshRunning;
     private volatile bool _telemetrySuspendedForCollection;
     private OverlayPlacement _currentOverlayPlacement = new();
@@ -110,6 +116,7 @@ public partial class MainWindow : Window
         _telemetrySource.SnapshotChanged += OnSnapshotChanged;
         _telemetrySource.StatusChanged += OnTelemetryStatusChanged;
         _placementSaveTimer.Tick += (_, _) => SavePendingOverlayPlacement();
+        _deviceWatchTimer.Tick += DeviceWatchTimer_Tick;
         InitializeTrayIcon();
     }
 
@@ -127,7 +134,9 @@ public partial class MainWindow : Window
                                            profile.Id.Equals(requestedProfileId, StringComparison.OrdinalIgnoreCase))
                                        ?? _profiles[0];
         RefreshWindowTargets();
+        _telemetryStartedAt = DateTimeOffset.UtcNow;
         _telemetrySource.Start();
+        _deviceWatchTimer.Start();
     }
 
     private async void OnContentRendered(object? sender, EventArgs e)
@@ -188,6 +197,7 @@ public partial class MainWindow : Window
     private void OnClosed(object? sender, EventArgs e)
     {
         SavePendingOverlayPlacement();
+        _deviceWatchTimer.Stop();
         _telemetrySource.Stop();
         _telemetrySource.SnapshotChanged -= OnSnapshotChanged;
         _telemetrySource.StatusChanged -= OnTelemetryStatusChanged;
@@ -214,6 +224,12 @@ public partial class MainWindow : Window
     private void InitializeTrayIcon()
     {
         _trayIconAsset = CreateTrayIcon();
+        var windowIcon = Imaging.CreateBitmapSourceFromHIcon(
+            _trayIconAsset.Handle,
+            Int32Rect.Empty,
+            BitmapSizeOptions.FromWidthAndHeight(64, 64));
+        windowIcon.Freeze();
+        Icon = windowIcon;
         var menu = new Forms.ContextMenuStrip();
         var openItem = new Forms.ToolStripMenuItem("打开主界面");
         var overlayItem = new Forms.ToolStripMenuItem("显示/隐藏悬浮层");
@@ -273,18 +289,18 @@ public partial class MainWindow : Window
 
     private static Drawing.Icon CreateTrayIcon()
     {
-        using var bitmap = new Drawing.Bitmap(32, 32);
+        using var bitmap = new Drawing.Bitmap(64, 64);
         using var graphics = Drawing.Graphics.FromImage(bitmap);
         graphics.SmoothingMode = Drawing2D.SmoothingMode.AntiAlias;
         graphics.Clear(Drawing.Color.Transparent);
 
         using var background = new Drawing.SolidBrush(Drawing.Color.FromArgb(244, 211, 138));
-        graphics.FillEllipse(background, 1, 1, 30, 30);
-        using var font = new Drawing.Font("Segoe UI", 17, Drawing.FontStyle.Bold, Drawing.GraphicsUnit.Pixel);
+        graphics.FillEllipse(background, 2, 2, 60, 60);
+        using var font = new Drawing.Font("Segoe UI", 34, Drawing.FontStyle.Bold, Drawing.GraphicsUnit.Pixel);
         using var foreground = new Drawing.SolidBrush(Drawing.Color.FromArgb(7, 16, 26));
         const string glyph = "M";
         var size = graphics.MeasureString(glyph, font);
-        graphics.DrawString(glyph, font, foreground, (32 - size.Width) / 2, (32 - size.Height) / 2 - 1);
+        graphics.DrawString(glyph, font, foreground, (64 - size.Width) / 2, (64 - size.Height) / 2 - 2);
 
         var iconHandle = bitmap.GetHicon();
         try
@@ -669,6 +685,7 @@ public partial class MainWindow : Window
             _latestTelemetrySnapshot = null;
             _latestTelemetrySnapshotAt = default;
             await Task.Run(_telemetrySource.Stop);
+            _telemetryStartedAt = DateTimeOffset.UtcNow;
             _telemetrySource.Start();
             var deadline = DateTimeOffset.UtcNow.AddSeconds(3);
             while (_latestTelemetrySnapshot is null && DateTimeOffset.UtcNow < deadline)
@@ -682,6 +699,27 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void DeviceWatchTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_telemetryRefreshRunning || _telemetrySuspendedForCollection)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var lastDataAt = _latestTelemetrySnapshotAt == default
+            ? _telemetryStartedAt
+            : _latestTelemetrySnapshotAt;
+        if (now - lastDataAt < TimeSpan.FromSeconds(6) ||
+            now - _lastAutomaticRefreshAt < TimeSpan.FromSeconds(8))
+        {
+            return;
+        }
+
+        _lastAutomaticRefreshAt = now;
+        await RefreshTelemetryAsync();
+    }
+
     private void PauseTelemetryForCollection()
     {
         _telemetrySuspendedForCollection = true;
@@ -691,6 +729,7 @@ public partial class MainWindow : Window
     private void ResumeTelemetryAfterCollection()
     {
         _telemetrySuspendedForCollection = false;
+        _telemetryStartedAt = DateTimeOffset.UtcNow;
         _telemetrySource.Start();
     }
 
@@ -701,6 +740,8 @@ public partial class MainWindow : Window
         {
             _overlayWindow.Hide();
             ToggleOverlayButton.Content = "显示悬浮层";
+            DashboardOverlayButton.Content = "显示到游戏屏幕";
+            OverlayStateText.Text = "当前未显示";
         }
         else
         {
@@ -708,6 +749,8 @@ public partial class MainWindow : Window
             _overlayWindow.RefreshPosition();
             _overlayWindow.ShowEncouragement();
             ToggleOverlayButton.Content = "隐藏悬浮层";
+            DashboardOverlayButton.Content = "隐藏游戏悬浮层";
+            OverlayStateText.Text = "正在全屏显示";
         }
     }
 
@@ -734,6 +777,8 @@ public partial class MainWindow : Window
         {
             _overlayWindow.Show();
             ToggleOverlayButton.Content = "隐藏悬浮层";
+            DashboardOverlayButton.Content = "隐藏游戏悬浮层";
+            OverlayStateText.Text = "正在全屏显示";
         }
         _overlayWindow.ShowEncouragement();
         AnimatePreviewToast();
