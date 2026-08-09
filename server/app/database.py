@@ -316,7 +316,8 @@ class Database:
     def update_firmware_progress(self, job_id: str, detail: str, percent: float) -> None:
         with self.connect() as connection:
             connection.execute(
-                """UPDATE jobs SET firmware_detail = ?, firmware_progress_percent = ?
+                """UPDATE jobs SET firmware_detail = ?,
+                   firmware_progress_percent = MAX(firmware_progress_percent, ?)
                    WHERE id = ? AND firmware_status = 'building'""",
                 (detail[:500], max(0.0, min(99.0, percent)), job_id),
             )
