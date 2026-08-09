@@ -120,6 +120,12 @@ public sealed class TelemetryViewModel : INotifyPropertyChanged
         BladeBattery = FormatBattery(snapshot.Batteries.Blade);
     }
 
+    public void SetAdventureGoal(string label, int progress)
+    {
+        GoalLabel = string.IsNullOrWhiteSpace(label) ? "本次冒险目标" : label;
+        GoalProgress = Math.Clamp(progress, 0, 100);
+    }
+
     public void SetEncouragement(string message) => Encouragement = message;
 
     public void SetSourceStatus(TelemetrySourceStatus status)

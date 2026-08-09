@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -44,6 +45,7 @@ esp_err_t usb_keyboard_switch_to_serial_jtag(void);
 bool usb_keyboard_is_ready(void);
 bool usb_telemetry_is_ready(void);
 esp_err_t usb_telemetry_write_line(const char *line);
+bool usb_telemetry_read_line(char *line, size_t line_size);
 esp_err_t usb_keyboard_press_keys(uint8_t modifier, const uint8_t keycodes[6]);
 esp_err_t usb_keyboard_release(void);
 esp_err_t usb_keyboard_tap_key(uint8_t modifier, uint8_t keycode, uint32_t hold_ms);

@@ -32,6 +32,7 @@ static const char *TAG = "max30102";
 static i2c_master_bus_handle_t s_bus;
 static i2c_master_dev_handle_t s_dev;
 static bool s_initialized;
+static bool s_running;
 
 static esp_err_t write_reg(uint8_t reg, uint8_t value)
 {
@@ -122,32 +123,15 @@ esp_err_t max30102_init(gpio_num_t sda_gpio, gpio_num_t scl_gpio, gpio_num_t int
     uint8_t revision = 0;
     (void)read_regs(REG_REV_ID, &revision, 1);
 
-    /* Reset, then configure SpO2 mode: 100 sps, 18-bit ADC, 411 us pulse. */
-    err = write_reg(REG_MODE_CONFIG, 0x40);
-    if (err != ESP_OK) {
-        return err;
-    }
-    vTaskDelay(pdMS_TO_TICKS(10));
-    /* Assert INT (GPIO7) when a new averaged PPG sample is ready. The task
-     * still drains the FIFO by polling so a missed edge cannot lose data. */
-    err = write_reg(REG_INTR_ENABLE_1, 0x40);
-    if (err == ESP_OK) err = write_reg(REG_INTR_ENABLE_2, 0x00);
-    if (err == ESP_OK) err = write_reg(REG_FIFO_WR_PTR, 0x00);
-    if (err == ESP_OK) err = write_reg(REG_OVF_COUNTER, 0x00);
-    if (err == ESP_OK) err = write_reg(REG_FIFO_RD_PTR, 0x00);
-    if (err == ESP_OK) err = write_reg(REG_FIFO_CONFIG, 0x50); /* avg=4, rollover=1 */
-    if (err == ESP_OK) err = write_reg(REG_MODE_CONFIG, 0x03); /* SpO2 */
-    if (err == ESP_OK) err = write_reg(REG_SPO2_CONFIG, 0x27); /* 4096nA, 100Hz, 411us */
-    if (err == ESP_OK) err = write_reg(REG_LED1_PA, 0x24);
-    if (err == ESP_OK) err = write_reg(REG_LED2_PA, 0x24);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "MAX30102 configuration failed: %s", esp_err_to_name(err));
-        return err;
-    }
-
     s_initialized = true;
+    s_running = false;
+    err = max30102_stop();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "MAX30102 initial shutdown failed: %s", esp_err_to_name(err));
+        return err;
+    }
     ESP_LOGI(TAG,
-             "MAX30102 ready, part=0x%02X revision=0x%02X, SDA=%d SCL=%d INT=%d",
+             "MAX30102 ready in low-power standby, part=0x%02X revision=0x%02X, SDA=%d SCL=%d INT=%d",
              part_id,
              revision,
              sda_gpio,
@@ -156,9 +140,66 @@ esp_err_t max30102_init(gpio_num_t sda_gpio, gpio_num_t scl_gpio, gpio_num_t int
     return ESP_OK;
 }
 
+esp_err_t max30102_start(void)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t err = write_reg(REG_MODE_CONFIG, 0x40); /* reset */
+    if (err != ESP_OK) {
+        return err;
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    /* Assert INT when averaged PPG data is ready; the task still drains the
+     * FIFO by polling so a missed edge cannot lose samples. */
+    if (err == ESP_OK) err = write_reg(REG_INTR_ENABLE_1, 0x40);
+    if (err == ESP_OK) err = write_reg(REG_INTR_ENABLE_2, 0x00);
+    if (err == ESP_OK) err = write_reg(REG_FIFO_WR_PTR, 0x00);
+    if (err == ESP_OK) err = write_reg(REG_OVF_COUNTER, 0x00);
+    if (err == ESP_OK) err = write_reg(REG_FIFO_RD_PTR, 0x00);
+    if (err == ESP_OK) err = write_reg(REG_FIFO_CONFIG, 0x50); /* avg=4, rollover=1 */
+    if (err == ESP_OK) err = write_reg(REG_SPO2_CONFIG, 0x27); /* 100Hz, 18-bit, 411us */
+    if (err == ESP_OK) err = write_reg(REG_LED1_PA, 0x24);
+    if (err == ESP_OK) err = write_reg(REG_LED2_PA, 0x24);
+    if (err == ESP_OK) err = write_reg(REG_MODE_CONFIG, 0x03); /* SpO2 mode */
+    if (err != ESP_OK) {
+        s_running = false;
+        return err;
+    }
+
+    s_running = true;
+    ESP_LOGI(TAG, "MAX30102 measurement started");
+    return ESP_OK;
+}
+
+esp_err_t max30102_stop(void)
+{
+    if (!s_initialized) {
+        return ESP_OK;
+    }
+
+    const esp_err_t led1_err = write_reg(REG_LED1_PA, 0x00);
+    const esp_err_t led2_err = write_reg(REG_LED2_PA, 0x00);
+    const esp_err_t shutdown_err = write_reg(REG_MODE_CONFIG, 0x80);
+    if (shutdown_err == ESP_OK) {
+        s_running = false;
+        ESP_LOGI(TAG, "MAX30102 entered low-power standby");
+    }
+    if (led1_err != ESP_OK) return led1_err;
+    if (led2_err != ESP_OK) return led2_err;
+    return shutdown_err;
+}
+
+bool max30102_is_running(void)
+{
+    return s_initialized && s_running;
+}
+
 esp_err_t max30102_read_sample(max30102_sample_t *sample)
 {
-    if (!s_initialized || sample == NULL) {
+    if (!s_initialized || !s_running || sample == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -183,14 +224,4 @@ esp_err_t max30102_read_sample(max30102_sample_t *sample)
     sample->red = ((uint32_t)raw[0] << 16 | (uint32_t)raw[1] << 8 | raw[2]) & 0x3FFFF;
     sample->ir = ((uint32_t)raw[3] << 16 | (uint32_t)raw[4] << 8 | raw[5]) & 0x3FFFF;
     return ESP_OK;
-}
-
-esp_err_t max30102_shutdown(void)
-{
-    if (!s_initialized) {
-        return ESP_OK;
-    }
-    esp_err_t err = write_reg(REG_MODE_CONFIG, 0x80);
-    s_initialized = false;
-    return err;
 }

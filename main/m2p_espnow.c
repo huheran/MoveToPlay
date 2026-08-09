@@ -19,11 +19,16 @@ static const char *TAG = "m2p_espnow";
 #define M2P_ESPNOW_RX_QUEUE_LEN 16
 #define M2P_ESPNOW_TX_POWER_QDBM 40 /* 10 dBm, unit is 0.25 dBm. */
 #define M2P_ESPNOW_PACKET_V1_SIZE 40
+#define M2P_ESPNOW_PACKET_V2_SIZE 44
 
 _Static_assert(sizeof(m2p_espnow_packet_t) <= ESP_NOW_MAX_DATA_LEN,
                "MoveToPlay packet must fit in one ESP-NOW v1 packet");
+_Static_assert(sizeof(m2p_espnow_packet_t) == 48,
+               "MoveToPlay v3 packet size must stay compatible");
 _Static_assert(offsetof(m2p_espnow_packet_t, battery_mv) == M2P_ESPNOW_PACKET_V1_SIZE,
                "MoveToPlay v1 packet size must stay compatible");
+_Static_assert(offsetof(m2p_espnow_packet_t, heart_rate_bpm_x10) == M2P_ESPNOW_PACKET_V2_SIZE,
+               "MoveToPlay v2 packet size must stay compatible");
 
 static const uint8_t s_broadcast_addr[ESP_NOW_ETH_ALEN] = {
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -94,8 +99,14 @@ static bool is_valid_packet(const m2p_espnow_packet_t *packet, int data_len)
         return false;
     }
 
+    if ((packet->version >= 2 && data_len < M2P_ESPNOW_PACKET_V2_SIZE) ||
+        (packet->version >= 3 && data_len < (int)sizeof(m2p_espnow_packet_t))) {
+        return false;
+    }
+
     return packet->type == M2P_ESPNOW_PACKET_TRACKER_IMU ||
-           packet->type == M2P_ESPNOW_PACKET_BLADE_STATE;
+           packet->type == M2P_ESPNOW_PACKET_BLADE_STATE ||
+           packet->type == M2P_ESPNOW_PACKET_BLADE_CONTROL;
 }
 
 static void espnow_recv_cb(const esp_now_recv_info_t *recv_info, const uint8_t *data, int data_len)
@@ -195,7 +206,7 @@ esp_err_t m2p_espnow_send_tracker_sample(uint8_t node_id,
 
     m2p_espnow_packet_t packet = {
         .magic = M2P_ESPNOW_MAGIC,
-        .version = M2P_ESPNOW_PACKET_VERSION,
+        .version = M2P_ESPNOW_TRACKER_PACKET_VERSION,
         .type = M2P_ESPNOW_PACKET_TRACKER_IMU,
         .node_id = node_id,
         .flags = battery_valid ? M2P_ESPNOW_TRACKER_FLAG_BATTERY_VALID : 0,
@@ -216,7 +227,9 @@ esp_err_t m2p_espnow_send_tracker_sample(uint8_t node_id,
         .reserved = 0,
     };
 
-    return esp_now_send(s_broadcast_addr, (const uint8_t *)&packet, sizeof(packet));
+    return esp_now_send(s_broadcast_addr,
+                        (const uint8_t *)&packet,
+                        M2P_ESPNOW_PACKET_V2_SIZE);
 }
 
 esp_err_t m2p_espnow_send_blade_state(uint8_t node_id,
@@ -225,7 +238,12 @@ esp_err_t m2p_espnow_send_blade_state(uint8_t node_id,
                                        uint32_t button_edge_timestamp_us,
                                        bool battery_valid,
                                        uint8_t battery_percent,
-                                       uint16_t battery_mv)
+                                       uint16_t battery_mv,
+                                       bool heart_rate_valid,
+                                       uint16_t heart_rate_bpm_x10,
+                                       bool finger_present,
+                                       m2p_heart_rate_state_t heart_rate_state,
+                                       uint8_t heart_rate_remaining_seconds)
 {
     ESP_RETURN_ON_FALSE(s_espnow_ready, ESP_ERR_INVALID_STATE, TAG, "esp-now not ready");
 
@@ -239,6 +257,15 @@ esp_err_t m2p_espnow_send_blade_state(uint8_t node_id,
     if (battery_valid) {
         flags |= M2P_ESPNOW_BLADE_FLAG_BATTERY_VALID;
     }
+    if (heart_rate_valid && heart_rate_bpm_x10 >= 400U && heart_rate_bpm_x10 <= 2000U) {
+        flags |= M2P_ESPNOW_BLADE_FLAG_HEART_RATE_VALID;
+    } else {
+        heart_rate_valid = false;
+        heart_rate_bpm_x10 = 0;
+    }
+    if (finger_present) {
+        flags |= M2P_ESPNOW_BLADE_FLAG_FINGER_PRESENT;
+    }
 
     m2p_espnow_packet_t packet = {
         .magic = M2P_ESPNOW_MAGIC,
@@ -251,6 +278,37 @@ esp_err_t m2p_espnow_send_blade_state(uint8_t node_id,
         .battery_mv = battery_valid ? battery_mv : 0,
         .battery_percent = battery_valid ? battery_percent : M2P_ESPNOW_BATTERY_PERCENT_UNKNOWN,
         .reserved = 0,
+        .heart_rate_bpm_x10 = heart_rate_valid ? heart_rate_bpm_x10 : 0,
+        .heart_rate_state = (uint8_t)heart_rate_state,
+        .heart_rate_remaining_seconds = heart_rate_remaining_seconds,
+    };
+
+    return esp_now_send(s_broadcast_addr, (const uint8_t *)&packet, sizeof(packet));
+}
+
+esp_err_t m2p_espnow_send_blade_heart_rate_control(uint32_t sequence,
+                                                    bool start,
+                                                    uint8_t duration_seconds)
+{
+    ESP_RETURN_ON_FALSE(s_espnow_ready, ESP_ERR_INVALID_STATE, TAG, "esp-now not ready");
+    if (start) {
+        ESP_RETURN_ON_FALSE(duration_seconds >= 5U && duration_seconds <= 30U,
+                            ESP_ERR_INVALID_ARG,
+                            TAG,
+                            "heart-rate duration must be 5..30 seconds");
+    }
+
+    const m2p_espnow_packet_t packet = {
+        .magic = M2P_ESPNOW_MAGIC,
+        .version = M2P_ESPNOW_PACKET_VERSION,
+        .type = M2P_ESPNOW_PACKET_BLADE_CONTROL,
+        .node_id = 100,
+        .flags = start ? M2P_ESPNOW_BLADE_CONTROL_FLAG_START : 0,
+        .sequence = sequence,
+        .timestamp_us = (uint32_t)esp_timer_get_time(),
+        .heart_rate_state = start ? M2P_HEART_RATE_STATE_WAITING_FOR_FINGER :
+                                    M2P_HEART_RATE_STATE_OFF,
+        .heart_rate_remaining_seconds = start ? duration_seconds : 0,
     };
 
     return esp_now_send(s_broadcast_addr, (const uint8_t *)&packet, sizeof(packet));

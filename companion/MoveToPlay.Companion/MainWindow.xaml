@@ -724,68 +724,112 @@
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
-                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             <Grid>
                                 <TextBlock FontSize="14" FontWeight="SemiBold" Foreground="#FFF1F5F9"
-                                           Text="使用流程" />
+                                           Text="本次冒险与运动报告" />
                                 <TextBlock HorizontalAlignment="Right" FontSize="10" Foreground="#FF7F8CA3"
-                                           Text="设置会自动保存" />
+                                           Text="目标设置与报告均保存在本机" />
                             </Grid>
-                            <UniformGrid Grid.Row="1" Margin="0,18,0,14" Columns="4">
-                                <StackPanel Margin="0,0,10,0">
-                                    <Border Width="30" Height="30" HorizontalAlignment="Left"
-                                            Background="#24F4D38A" CornerRadius="9">
-                                        <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                   FontWeight="Bold" Foreground="{Binding AccentBrush}" Text="1" />
-                                    </Border>
-                                    <TextBlock Margin="0,10,0,0" FontSize="12" FontWeight="SemiBold"
-                                               Foreground="#FFE8EEF7" Text="选择游戏" />
-                                    <TextBlock Margin="0,5,0,0" FontSize="10" LineHeight="17" Foreground="#FF8391A6"
-                                               TextWrapping="Wrap" Text="选择主题和目标游戏窗口" />
-                                </StackPanel>
-                                <StackPanel Margin="4,0">
-                                    <Border Width="30" Height="30" HorizontalAlignment="Left"
-                                            Background="#242DD4BF" CornerRadius="9">
-                                        <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                   FontWeight="Bold" Foreground="#FF5EEAD4" Text="2" />
-                                    </Border>
-                                    <TextBlock Margin="0,10,0,0" FontSize="12" FontWeight="SemiBold"
-                                               Foreground="#FFE8EEF7" Text="打开控制窗" />
-                                    <TextBlock Margin="0,5,0,0" FontSize="10" LineHeight="17" Foreground="#FF8391A6"
-                                               TextWrapping="Wrap" Text="自动显示真实悬浮效果" />
-                                </StackPanel>
-                                <StackPanel Margin="8,0,4,0">
-                                    <Border Width="30" Height="30" HorizontalAlignment="Left"
-                                            Background="#2480D9FF" CornerRadius="9">
-                                        <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                   FontWeight="Bold" Foreground="#FF80D9FF" Text="3" />
-                                    </Border>
-                                    <TextBlock Margin="0,10,0,0" FontSize="12" FontWeight="SemiBold"
-                                               Foreground="#FFE8EEF7" Text="实时调位置" />
-                                    <TextBlock Margin="0,5,0,0" FontSize="10" LineHeight="17" Foreground="#FF8391A6"
-                                               TextWrapping="Wrap" Text="拖动水平、垂直位置" />
-                                </StackPanel>
-                                <StackPanel Margin="10,0,0,0">
-                                    <Border Width="30" Height="30" HorizontalAlignment="Left"
-                                            Background="#24C084FC" CornerRadius="9">
-                                        <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                   FontWeight="Bold" Foreground="#FFBAE6FD" Text="4" />
-                                    </Border>
-                                    <TextBlock Margin="0,10,0,0" FontSize="12" FontWeight="SemiBold"
-                                               Foreground="#FFE8EEF7" Text="调整文字" />
-                                    <TextBlock Margin="0,5,0,0" FontSize="10" LineHeight="17" Foreground="#FF8391A6"
-                                               TextWrapping="Wrap" Text="分别缩放五组信息" />
-                                </StackPanel>
-                            </UniformGrid>
-                            <Border Grid.Row="2" Padding="12,9" Background="#FF111A29" CornerRadius="10">
-                                <Grid>
-                                    <TextBlock FontFamily="Consolas" FontSize="10" Foreground="#FFAAB8CA"
-                                               Text="CTRL + SHIFT + F10" />
-                                    <TextBlock HorizontalAlignment="Right" FontSize="10" Foreground="#FF718198"
-                                               Text="随时显示 / 隐藏悬浮层" />
+
+                            <StackPanel x:Name="AdventureSetupPanel" Grid.Row="1" Margin="0,15,0,0">
+                                <TextBlock FontSize="10" Foreground="#FF8D9BB0" Text="玩家冒险目标" />
+                                <Grid Margin="0,7,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="170" />
+                                        <ColumnDefinition Width="10" />
+                                        <ColumnDefinition Width="92" />
+                                        <ColumnDefinition Width="52" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox x:Name="GoalTypeSelector"
+                                              SelectionChanged="GoalTypeSelector_SelectionChanged" />
+                                    <TextBox x:Name="GoalTargetTextBox" Grid.Column="2" Height="38" Padding="10,8"
+                                             VerticalContentAlignment="Center" FontSize="12"
+                                             Foreground="#FFF1F5F9" Background="#C70B111C"
+                                             BorderBrush="#FF2B3649" BorderThickness="1" />
+                                    <TextBlock x:Name="GoalUnitText" Grid.Column="3" Margin="8,0,0,0"
+                                               VerticalAlignment="Center" FontSize="10" Foreground="#FF93A3B8"
+                                               Text="kcal" />
+                                    <Button Grid.Column="4" Height="38" Style="{StaticResource GhostButton}"
+                                            Content="应用目标" Click="ApplyAdventureGoal_Click" />
                                 </Grid>
-                            </Border>
+                                <Border Margin="0,10,0,0" Padding="12,9" Background="#FF111A29" CornerRadius="10">
+                                    <Grid>
+                                        <TextBlock x:Name="GoalProgressSummaryText" FontSize="11" FontWeight="SemiBold"
+                                                   Foreground="{Binding AccentBrush}" Text="当前 0 / 100 kcal · 0%" />
+                                        <TextBlock x:Name="GoalSettingsStatusText" HorizontalAlignment="Right"
+                                                   FontSize="9" Foreground="#FF8290A5" Text="可随时修改" />
+                                    </Grid>
+                                </Border>
+                                <Grid Margin="0,13,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="210" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock VerticalAlignment="Center" MaxWidth="400" FontSize="10" LineHeight="17"
+                                               Foreground="#FF8D9BB0" TextWrapping="Wrap"
+                                               Text="运动结束后，小剑背面的MAX30102会开启并进行10秒静止测量，完成后自动生成本次报告。" />
+                                    <Button x:Name="EndWorkoutButton" Grid.Column="1" Height="42"
+                                            Style="{StaticResource PrimaryButton}" Content="结束运动并测量心率"
+                                            Click="EndWorkoutButton_Click" />
+                                </Grid>
+                            </StackPanel>
+
+                            <Grid x:Name="HeartRateMeasurePanel" Grid.Row="1" Margin="0,10,0,0" Visibility="Collapsed">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="150" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Border Width="126" Height="126" VerticalAlignment="Center"
+                                        Background="#28FF7690" BorderBrush="#66FF7690" BorderThickness="1"
+                                        CornerRadius="63">
+                                    <TextBlock x:Name="HeartRateCountdownText" HorizontalAlignment="Center"
+                                               VerticalAlignment="Center" FontSize="54" FontWeight="Black"
+                                               Foreground="#FFFF8DA3" Text="10" />
+                                </Border>
+                                <StackPanel Grid.Column="1" Margin="18,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock x:Name="HeartRateMeasureTitle" FontSize="19" FontWeight="Bold"
+                                               Foreground="#FFF8FAFC" Text="正在准备心率测量" />
+                                    <TextBlock x:Name="HeartRateMeasureHint" Margin="0,9,0,0" MaxWidth="430"
+                                               FontSize="12" LineHeight="21" Foreground="#FFB2C0D2"
+                                               TextWrapping="Wrap"
+                                               Text="请把手指放到小剑背面的MAX30102上，并保持身体静止" />
+                                    <TextBlock Margin="0,12,0,0" FontSize="10" Foreground="#FF718198"
+                                               Text="测量完成后传感器会自动关闭" />
+                                </StackPanel>
+                            </Grid>
+
+                            <Grid x:Name="WorkoutReportPanel" Grid.Row="1" Margin="0,11,0,0" Visibility="Collapsed">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <UniformGrid Columns="4" Rows="2">
+                                    <StackPanel Margin="0,0,10,8"><TextBlock FontSize="9" Foreground="#FF7F8CA3" Text="本次总时长" /><TextBlock x:Name="ReportDurationText" Margin="0,4,0,0" FontSize="18" FontWeight="Bold" Foreground="#FFF8FAFC" Text="00:00" /></StackPanel>
+                                    <StackPanel Margin="5,0,10,8"><TextBlock FontSize="9" Foreground="#FF7F8CA3" Text="有效运动" /><TextBlock x:Name="ReportActiveTimeText" Margin="0,4,0,0" FontSize="18" FontWeight="Bold" Foreground="#FFF8FAFC" Text="00:00" /></StackPanel>
+                                    <StackPanel Margin="5,0,10,8"><TextBlock FontSize="9" Foreground="#FF7F8CA3" Text="估算消耗" /><TextBlock x:Name="ReportCaloriesText" Margin="0,4,0,0" FontSize="18" FontWeight="Bold" Foreground="{Binding AccentBrush}" Text="0.0 kcal" /></StackPanel>
+                                    <StackPanel Margin="5,0,0,8"><TextBlock FontSize="9" Foreground="#FF7F8CA3" Text="运动后心率" /><TextBlock x:Name="ReportHeartRateText" Margin="0,4,0,0" FontSize="18" FontWeight="Bold" Foreground="#FFFF8DA3" Text="— BPM" /></StackPanel>
+                                    <StackPanel Margin="0,5,10,0"><TextBlock FontSize="9" Foreground="#FF7F8CA3" Text="动作事件" /><TextBlock x:Name="ReportActionCountText" Margin="0,4,0,0" FontSize="18" FontWeight="Bold" Foreground="#FFF8FAFC" Text="0 次" /></StackPanel>
+                                    <StackPanel Margin="5,5,10,0"><TextBlock FontSize="9" Foreground="#FF7F8CA3" Text="最高连击" /><TextBlock x:Name="ReportComboText" Margin="0,4,0,0" FontSize="18" FontWeight="Bold" Foreground="#FFF8FAFC" Text="0 次" /></StackPanel>
+                                    <StackPanel Margin="5,5,10,0"><TextBlock FontSize="9" Foreground="#FF7F8CA3" Text="平均 / 最高强度" /><TextBlock x:Name="ReportIntensityText" Margin="0,4,0,0" FontSize="18" FontWeight="Bold" Foreground="#FF80D9FF" Text="0% / 0%" /></StackPanel>
+                                    <StackPanel Margin="5,5,0,0"><TextBlock FontSize="9" Foreground="#FF7F8CA3" Text="冒险目标" /><TextBlock x:Name="ReportGoalText" Margin="0,4,0,0" FontSize="18" FontWeight="Bold" Foreground="{Binding AccentBrush}" Text="0%" /></StackPanel>
+                                </UniformGrid>
+                                <TextBlock x:Name="ReportTopActionText" Grid.Row="1" Margin="0,8,0,0"
+                                           VerticalAlignment="Bottom" FontSize="10" Foreground="#FF9AABBF"
+                                           TextTrimming="CharacterEllipsis" Text="本次暂无单次动作事件记录" />
+                                <Grid Grid.Row="2" Margin="0,8,0,0">
+                                    <TextBlock x:Name="ReportSaveStatusText" VerticalAlignment="Center"
+                                               FontSize="9" Foreground="#FF718198" Text="报告已生成" />
+                                    <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                                        <Button Width="112" Height="32" Style="{StaticResource GhostButton}"
+                                                Content="打开报告目录" Click="OpenReportFolderButton_Click" />
+                                        <Button Width="112" Height="32" Margin="8,0,0,0" Style="{StaticResource PrimaryButton}"
+                                                Content="开始新一轮" Click="StartNewWorkoutButton_Click" />
+                                    </StackPanel>
+                                </Grid>
+                            </Grid>
                         </Grid>
                     </Border>
 
