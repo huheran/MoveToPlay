@@ -1,4 +1,25 @@
 using MoveToPlay.Companion.Services;
+using MoveToPlay.Companion.Models;
+using MoveToPlay.Companion.ViewModels;
+
+if (args.SequenceEqual(["--toast-latch"]))
+{
+    var viewModel = new TelemetryViewModel();
+    viewModel.SetActionToast("右手挥砍", "挥砍命中，保持动作节奏！", 1);
+    viewModel.ApplySnapshot(new TelemetrySnapshot(
+        "待机", "等待动作", null, HeartRateMeasurementState.Off, 0,
+        0, TimeSpan.Zero, 0, 1, "Tracker 在线 3/4 · 请检查设备", false,
+        0, 0, false, 1, "", 3, 75, true,
+        new DeviceBatterySnapshot(null, null, null, null, null)));
+    if (viewModel.ToastActionName != "右手挥砍" ||
+        viewModel.ToastMessage != "挥砍命中，保持动作节奏！" ||
+        viewModel.ToastComboDisplay != "COMBO ×1")
+    {
+        throw new InvalidOperationException("动作弹窗被后续连接状态遥测覆盖");
+    }
+    Console.WriteLine("[smoke] 动作弹窗内容锁定 PASS");
+    return;
+}
 
 if (args.SequenceEqual(["--heart-rate-estimate"]))
 {

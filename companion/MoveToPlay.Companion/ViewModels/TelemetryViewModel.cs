@@ -18,6 +18,9 @@ public sealed class TelemetryViewModel : INotifyPropertyChanged
     private int _goalProgress;
     private int _combo;
     private string _encouragement = "正在搜索 MoveToPlay Dongle";
+    private string _toastActionName = "MoveToPlay";
+    private string _toastMessage = "悬浮层已就绪";
+    private string _toastComboDisplay = "";
     private string _statusText = "SEARCHING";
     private string _sourceLabel = "USB CDC";
     private string _connectionDetail = "正在搜索 MoveToPlay Dongle";
@@ -57,6 +60,9 @@ public sealed class TelemetryViewModel : INotifyPropertyChanged
     public int GoalProgress { get => _goalProgress; private set => Set(ref _goalProgress, value); }
     public int Combo { get => _combo; private set => Set(ref _combo, value); }
     public string Encouragement { get => _encouragement; private set => Set(ref _encouragement, value); }
+    public string ToastActionName { get => _toastActionName; private set => Set(ref _toastActionName, value); }
+    public string ToastMessage { get => _toastMessage; private set => Set(ref _toastMessage, value); }
+    public string ToastComboDisplay { get => _toastComboDisplay; private set => Set(ref _toastComboDisplay, value); }
     public string StatusText { get => _statusText; private set => Set(ref _statusText, value); }
     public string SourceLabel { get => _sourceLabel; private set => Set(ref _sourceLabel, value); }
     public string ConnectionDetail { get => _connectionDetail; private set => Set(ref _connectionDetail, value); }
@@ -127,6 +133,13 @@ public sealed class TelemetryViewModel : INotifyPropertyChanged
     }
 
     public void SetEncouragement(string message) => Encouragement = message;
+
+    public void SetActionToast(string actionName, string message, int combo)
+    {
+        ToastActionName = string.IsNullOrWhiteSpace(actionName) ? "动作完成" : actionName;
+        ToastMessage = string.IsNullOrWhiteSpace(message) ? "动作完成，继续保持！" : message;
+        ToastComboDisplay = combo > 0 ? $"COMBO ×{combo}" : "";
+    }
 
     public void SetSourceStatus(TelemetrySourceStatus status)
     {

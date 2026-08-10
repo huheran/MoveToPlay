@@ -464,10 +464,6 @@ public sealed class UsbCdcTelemetryService : ITelemetrySource
                                              int trackerOnline,
                                              bool celebrate)
     {
-        if (trackerOnline < 4)
-        {
-            return $"Tracker 在线 {trackerOnline}/4 · 请检查设备";
-        }
         if (celebrate)
         {
             return action switch
@@ -478,6 +474,10 @@ public sealed class UsbCdcTelemetryService : ITelemetrySource
                 "ultraman_beam" => "能量释放，完成技能动作！",
                 _ => "动作完成，继续积累运动能量！",
             };
+        }
+        if (trackerOnline < 4)
+        {
+            return $"Tracker 在线 {trackerOnline}/4 · 请检查设备";
         }
         if (intensity >= 75)
         {

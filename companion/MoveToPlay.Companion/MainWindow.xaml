@@ -617,8 +617,13 @@
                                     <TextBlock Margin="0,0,8,0" FontFamily="{Binding HudFontFamily}"
                                                Foreground="{Binding AccentBrush}" Text="{Binding MarkerGlyph}" />
                                     <controls:OutlinedText FontFamily="{Binding HudFontFamily}" FontSize="12" FontWeight="Black"
+                                                           Foreground="{Binding AccentBrush}" Stroke="#FF000000" StrokeThickness="1.25"
+                                                           Text="{Binding ToastActionName}" />
+                                    <controls:OutlinedText Margin="5,0" FontFamily="{Binding HudFontFamily}" FontSize="12" FontWeight="Black"
+                                                           Foreground="{Binding PrimaryTextBrush}" Stroke="#FF000000" StrokeThickness="1.25" Text="·" />
+                                    <controls:OutlinedText FontFamily="{Binding HudFontFamily}" FontSize="12" FontWeight="Black"
                                                            Foreground="{Binding PrimaryTextBrush}" Stroke="#FF000000" StrokeThickness="1.25"
-                                                           Text="{Binding Encouragement}" />
+                                                           Text="{Binding ToastMessage}" />
                                 </StackPanel>
                             </Border>
                         </Grid>

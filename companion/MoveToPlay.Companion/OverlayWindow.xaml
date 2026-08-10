@@ -161,11 +161,16 @@
                                        Foreground="{Binding AccentBrush}" Stroke="#FF000000" StrokeThickness="1.5"
                                        Text="{Binding MarkerGlyph}" />
                 <controls:OutlinedText FontFamily="{Binding HudFontFamily}" FontSize="18" FontWeight="Black"
+                                       Foreground="{Binding AccentBrush}" Stroke="#FF000000" StrokeThickness="1.9"
+                                       Text="{Binding ToastActionName}" />
+                <controls:OutlinedText Margin="8,0,8,0" FontFamily="{Binding HudFontFamily}" FontSize="18" FontWeight="Black"
+                                       Foreground="#FFFFFFFF" Stroke="#FF000000" StrokeThickness="1.9" Text="·" />
+                <controls:OutlinedText FontFamily="{Binding HudFontFamily}" FontSize="18" FontWeight="Black"
                                        Foreground="#FFFFFFFF" Stroke="#FF000000" StrokeThickness="1.9"
-                                       Text="{Binding Encouragement}" />
+                                       Text="{Binding ToastMessage}" />
                 <controls:OutlinedText Margin="16,1,0,0" FontFamily="Consolas" FontSize="12" FontWeight="Bold"
                                        Foreground="{Binding AccentSecondaryBrush}" Stroke="#F5000000" StrokeThickness="1.25"
-                                       Text="{Binding Combo, StringFormat={}COMBO ×{0}}" />
+                                       Text="{Binding ToastComboDisplay}" />
             </StackPanel>
         </Border>
     </Grid>

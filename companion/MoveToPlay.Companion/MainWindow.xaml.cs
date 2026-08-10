@@ -464,13 +464,23 @@ public partial class MainWindow : Window
         {
             if (snapshot.Celebrate && profile.Encouragements.Length > 0)
             {
-                var messageIndex = Math.Abs(snapshot.Combo) % profile.Encouragements.Length;
-                _viewModel.SetEncouragement(profile.Encouragements[messageIndex]);
+                var messageIndex = Math.Max(0, snapshot.Combo - 1) % profile.Encouragements.Length;
+                _viewModel.SetActionToast(
+                    string.IsNullOrWhiteSpace(snapshot.EventAction) ? snapshot.ActionName : snapshot.EventAction,
+                    profile.Encouragements[messageIndex],
+                    snapshot.Combo);
             }
         }
 
         if (snapshot.Celebrate)
         {
+            if (ProfileSelector.SelectedItem is not GameProfile { Encouragements.Length: > 0 })
+            {
+                _viewModel.SetActionToast(
+                    string.IsNullOrWhiteSpace(snapshot.EventAction) ? snapshot.ActionName : snapshot.EventAction,
+                    snapshot.Encouragement,
+                    snapshot.Combo);
+            }
             _overlayWindow?.ShowEncouragement();
             AnimatePreviewToast();
         }
@@ -1369,6 +1379,7 @@ public partial class MainWindow : Window
         {
             _overlayWindow.Show();
             _overlayWindow.RefreshPosition();
+            PreparePreviewToast();
             _overlayWindow.ShowEncouragement();
             ToggleOverlayButton.Content = "隐藏悬浮层";
             DashboardToggleOverlayButton.Content = "隐藏悬浮层";
@@ -1396,6 +1407,7 @@ public partial class MainWindow : Window
     private void EncouragementButton_Click(object sender, RoutedEventArgs e)
     {
         EnsureOverlayWindow();
+        PreparePreviewToast();
         if (!_overlayWindow!.IsVisible)
         {
             _overlayWindow.Show();
@@ -1405,6 +1417,20 @@ public partial class MainWindow : Window
         }
         _overlayWindow.ShowEncouragement();
         AnimatePreviewToast();
+    }
+
+    private void PreparePreviewToast()
+    {
+        if (ProfileSelector.SelectedItem is not GameProfile profile)
+        {
+            _viewModel.SetActionToast("激励预览", "保持节奏，继续前进！", 0);
+            return;
+        }
+        var messages = profile.Encouragements.Length > 0
+            ? profile.Encouragements
+            : ["保持节奏，继续前进！"];
+        var index = Math.Max(0, _viewModel.Combo) % messages.Length;
+        _viewModel.SetActionToast("激励预览", messages[index], 0);
     }
 
     private void ApplyPreviewPosition(OverlayPlacement placement)
