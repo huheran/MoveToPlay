@@ -727,7 +727,7 @@ public partial class TrainingWindow : Window
             return true;
         }
         ConnectCloudButton.IsEnabled = false;
-        SetCloudStatus("正在通过 SSH 连接…", "#FFF59E0B");
+        SetCloudStatus("正在建立安全云端通道…", "#FFF59E0B");
         try
         {
             _api?.Dispose();
@@ -749,7 +749,7 @@ public partial class TrainingWindow : Window
         {
             SetCloudStatus("云端连接失败", "#FFEF4444");
             MessageBox.Show(this,
-                $"{exception.Message}\n\n请先确认：网络可用、命令行可执行 ssh movetoplay-server。",
+                $"{exception.Message}\n\n安装包版本请确认网络可用；开发版本还需确认 ssh movetoplay-server 可用。",
                 "连接失败", MessageBoxButton.OK, MessageBoxImage.Error);
             return false;
         }
