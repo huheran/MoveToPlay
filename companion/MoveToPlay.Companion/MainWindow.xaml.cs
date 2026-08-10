@@ -22,6 +22,8 @@ namespace MoveToPlay.Companion;
 
 public partial class MainWindow : Window
 {
+    private const int PostWorkoutHeartRateMeasurementSeconds = 15;
+
     private sealed record OverlayAnchorOption(string Id, string DisplayName)
     {
         public override string ToString() => DisplayName;
@@ -183,12 +185,49 @@ public partial class MainWindow : Window
 
     private async void OnContentRendered(object? sender, EventArgs e)
     {
+        var heartRateFailureCaptureArgument = Environment.GetCommandLineArgs()
+            .FirstOrDefault(argument => argument.StartsWith("--capture-heart-rate-failure=", StringComparison.OrdinalIgnoreCase));
+        if (heartRateFailureCaptureArgument is not null)
+        {
+            await Task.Delay(250);
+            EndWorkoutButton_Click(this, new RoutedEventArgs());
+            ShowHeartRateFailure(
+                "心率测量失败，报告尚未生成",
+                "请擦拭传感器、完整盖住探头并保持静止15秒；也可以跳过心率。");
+            await Task.Delay(150);
+            var failureOutputPath = Path.GetFullPath(
+                heartRateFailureCaptureArgument["--capture-heart-rate-failure=".Length..].Trim('"'));
+            CaptureElementToPng(MainShell, failureOutputPath);
+            _exitRequested = true;
+            Close();
+            return;
+        }
+
+        var skippedReportCaptureArgument = Environment.GetCommandLineArgs()
+            .FirstOrDefault(argument => argument.StartsWith("--capture-skipped-report=", StringComparison.OrdinalIgnoreCase));
+        if (skippedReportCaptureArgument is not null)
+        {
+            await Task.Delay(250);
+            EndWorkoutButton_Click(this, new RoutedEventArgs());
+            ShowHeartRateFailure(
+                "心率测量失败，报告尚未生成",
+                "可以重新测量，或跳过心率直接保存本次运动报告。");
+            SkipHeartRateAndGenerateReport_Click(this, new RoutedEventArgs());
+            await Task.Delay(150);
+            var skippedReportOutputPath = Path.GetFullPath(
+                skippedReportCaptureArgument["--capture-skipped-report=".Length..].Trim('"'));
+            CaptureElementToPng(MainShell, skippedReportOutputPath);
+            _exitRequested = true;
+            Close();
+            return;
+        }
+
         var reportCaptureArgument = Environment.GetCommandLineArgs()
             .FirstOrDefault(argument => argument.StartsWith("--capture-report=", StringComparison.OrdinalIgnoreCase));
         if (reportCaptureArgument is not null)
         {
             EndWorkoutButton_Click(this, new RoutedEventArgs());
-            await Task.Delay(11500);
+            await Task.Delay(TimeSpan.FromSeconds(PostWorkoutHeartRateMeasurementSeconds + 1.5));
             var reportOutputPath = Path.GetFullPath(
                 reportCaptureArgument["--capture-report=".Length..].Trim('"'));
             CaptureElementToPng(MainShell, reportOutputPath);
@@ -574,29 +613,35 @@ public partial class MainWindow : Window
             GoalSettingsStatusText.Text = "尚未收到Dongle数据，请先连接设备";
             return;
         }
-        if (!snapshot.BladeOnline)
+        if (!_endingWorkout || _pendingReportSnapshot is null)
         {
-            GoalSettingsStatusText.Text = "Blade未在线，无法开始运动后心率测量";
-            return;
+            _pendingReportSnapshot = snapshot;
+            _pendingReportEndedAt = DateTimeOffset.Now;
         }
-
-        _pendingReportSnapshot = snapshot;
-        _pendingReportEndedAt = DateTimeOffset.Now;
         _endingWorkout = true;
         _measurementAcknowledged = false;
         _measurementCommandSentAt = DateTimeOffset.UtcNow;
-        if (!_telemetrySource.StartHeartRateMeasurement(10))
+        HeartRateFailureBanner.Visibility = Visibility.Collapsed;
+        GoalSettingsStatusText.Foreground = new SolidColorBrush(Color.FromRgb(130, 144, 165));
+        if (!snapshot.BladeOnline)
         {
-            _endingWorkout = false;
-            _pendingReportSnapshot = null;
-            GoalSettingsStatusText.Text = "心率测量命令发送失败，请刷新设备后重试";
+            ShowHeartRateFailure(
+                "Blade未在线，心率测量无法开始",
+                "请检查小剑电源和无线连接；也可以跳过心率直接生成报告。");
+            return;
+        }
+        if (!_telemetrySource.StartHeartRateMeasurement(PostWorkoutHeartRateMeasurementSeconds))
+        {
+            ShowHeartRateFailure(
+                "心率测量命令发送失败",
+                "请刷新设备后重新测量；也可以跳过心率直接生成报告。");
             return;
         }
 
         AdventureSetupPanel.Visibility = Visibility.Collapsed;
         WorkoutReportPanel.Visibility = Visibility.Collapsed;
         HeartRateMeasurePanel.Visibility = Visibility.Visible;
-        HeartRateCountdownText.Text = "10";
+        HeartRateCountdownText.Text = PostWorkoutHeartRateMeasurementSeconds.ToString(CultureInfo.InvariantCulture);
         HeartRateMeasureTitle.Text = "正在通知小剑开启心率传感器";
         HeartRateMeasureHint.Text = "请把手指放到小剑背面的MAX30102上，并保持身体静止";
         EndWorkoutButton.IsEnabled = false;
@@ -614,8 +659,8 @@ public partial class MainWindow : Window
             case HeartRateMeasurementState.WaitingForFinger:
                 _measurementAcknowledged = true;
                 HeartRateMeasureTitle.Text = "请将手指贴住小剑背面";
-                HeartRateMeasureHint.Text = "检测到手指后自动开始10秒测量，请保持静止";
-                HeartRateCountdownText.Text = "10";
+                HeartRateMeasureHint.Text = "检测到手指后自动开始15秒测量，请保持静止";
+                HeartRateCountdownText.Text = PostWorkoutHeartRateMeasurementSeconds.ToString(CultureInfo.InvariantCulture);
                 break;
             case HeartRateMeasurementState.Measuring:
                 _measurementAcknowledged = true;
@@ -627,18 +672,40 @@ public partial class MainWindow : Window
                 GenerateWorkoutReport(snapshot.HeartRate.Value);
                 break;
             case HeartRateMeasurementState.Failed when _measurementAcknowledged:
-                HeartRateMeasureTitle.Text = "本次心率测量未成功";
-                HeartRateMeasureHint.Text = "请擦拭传感器并稳定按住，然后点击重新测量";
-                HeartRateCountdownText.Text = "!";
-                EndWorkoutButton.Content = "重新测量";
-                EndWorkoutButton.IsEnabled = true;
-                AdventureSetupPanel.Visibility = Visibility.Visible;
-                HeartRateMeasurePanel.Visibility = Visibility.Collapsed;
+                ShowHeartRateFailure(
+                    "心率测量失败，报告尚未生成",
+                    "请擦拭传感器、完整盖住探头并保持静止15秒；也可以跳过心率。");
                 break;
         }
     }
 
-    private void GenerateWorkoutReport(int postWorkoutHeartRate)
+    private void ShowHeartRateFailure(string title, string hint)
+    {
+        _endingWorkout = true;
+        HeartRateFailureTitleText.Text = title;
+        HeartRateFailureHintText.Text = hint;
+        HeartRateFailureBanner.Visibility = Visibility.Visible;
+        GoalSettingsStatusText.Text = "心率未测得";
+        GoalSettingsStatusText.Foreground = new SolidColorBrush(Color.FromRgb(255, 141, 163));
+        EndWorkoutButton.Content = "重新测量";
+        EndWorkoutButton.IsEnabled = true;
+        AdventureSetupPanel.Visibility = Visibility.Visible;
+        HeartRateMeasurePanel.Visibility = Visibility.Collapsed;
+        WorkoutReportPanel.Visibility = Visibility.Collapsed;
+    }
+
+    private void SkipHeartRateAndGenerateReport_Click(object sender, RoutedEventArgs e)
+    {
+        if (_pendingReportSnapshot is null)
+        {
+            GoalSettingsStatusText.Text = "没有可生成报告的运动数据";
+            return;
+        }
+        _ = _telemetrySource.StopHeartRateMeasurement();
+        GenerateWorkoutReport(null);
+    }
+
+    private void GenerateWorkoutReport(int? postWorkoutHeartRate)
     {
         if (_pendingReportSnapshot is not { } snapshot)
         {
@@ -671,7 +738,9 @@ public partial class MainWindow : Window
         try
         {
             _lastReportPath = _workoutReportService.Save(report);
-            ReportSaveStatusText.Text = $"已保存：{Path.GetFileName(_lastReportPath)}";
+            ReportSaveStatusText.Text = postWorkoutHeartRate is null
+                ? $"已保存（心率未测得）：{Path.GetFileName(_lastReportPath)}"
+                : $"已保存：{Path.GetFileName(_lastReportPath)}";
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -682,7 +751,9 @@ public partial class MainWindow : Window
         ReportDurationText.Text = FormatReportDuration(TimeSpan.FromSeconds(report.TotalDurationSeconds));
         ReportActiveTimeText.Text = FormatReportDuration(TimeSpan.FromSeconds(report.ActiveDurationSeconds));
         ReportCaloriesText.Text = $"{report.EstimatedCalories:0.0} kcal";
-        ReportHeartRateText.Text = $"{postWorkoutHeartRate} BPM";
+        ReportHeartRateText.Text = postWorkoutHeartRate is { } heartRate
+            ? $"{heartRate} BPM"
+            : "未测得";
         ReportActionCountText.Text = $"{report.ActionCount} 次";
         ReportComboText.Text = $"{report.MaxCombo} 次";
         ReportIntensityText.Text = $"{report.AverageIntensityPercent}% / {report.MaxIntensityPercent}%";
@@ -696,6 +767,7 @@ public partial class MainWindow : Window
 
         HeartRateMeasurePanel.Visibility = Visibility.Collapsed;
         AdventureSetupPanel.Visibility = Visibility.Collapsed;
+        HeartRateFailureBanner.Visibility = Visibility.Collapsed;
         WorkoutReportPanel.Visibility = Visibility.Visible;
         _endingWorkout = false;
         EndWorkoutButton.Content = "结束运动并测量心率";
@@ -723,8 +795,10 @@ public partial class MainWindow : Window
         _ = _telemetrySource.StopHeartRateMeasurement();
         WorkoutReportPanel.Visibility = Visibility.Collapsed;
         HeartRateMeasurePanel.Visibility = Visibility.Collapsed;
+        HeartRateFailureBanner.Visibility = Visibility.Collapsed;
         AdventureSetupPanel.Visibility = Visibility.Visible;
         GoalSettingsStatusText.Text = "新一轮运动已经开始";
+        GoalSettingsStatusText.Foreground = new SolidColorBrush(Color.FromRgb(130, 144, 165));
         RefreshAdventureGoalDisplay(_latestTelemetrySnapshot);
     }
 
@@ -1196,12 +1270,9 @@ public partial class MainWindow : Window
         if (_endingWorkout && !_measurementAcknowledged &&
             DateTimeOffset.UtcNow - _measurementCommandSentAt > TimeSpan.FromSeconds(5))
         {
-            _endingWorkout = false;
-            HeartRateMeasurePanel.Visibility = Visibility.Collapsed;
-            AdventureSetupPanel.Visibility = Visibility.Visible;
-            EndWorkoutButton.Content = "重新发送测量命令";
-            EndWorkoutButton.IsEnabled = true;
-            GoalSettingsStatusText.Text = "Blade未确认测量命令，请检查其在线状态后重试";
+            ShowHeartRateFailure(
+                "Blade未确认心率测量命令",
+                "请检查小剑是否在线后重新测量；也可以跳过心率直接生成报告。");
         }
         if (_telemetryRefreshRunning || _telemetrySuspendedForCollection)
         {
