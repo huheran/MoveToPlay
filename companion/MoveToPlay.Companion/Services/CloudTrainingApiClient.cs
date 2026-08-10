@@ -129,6 +129,12 @@ public sealed class CloudTrainingApiClient : IDisposable
     public Task<CloudJob> ActivateModelAsync(string jobId, CancellationToken cancellationToken = default) =>
         SendJsonAsync<CloudJob>(HttpMethod.Post, $"/api/v1/models/{jobId}/activate", new { }, cancellationToken);
 
+    public Task<CloudJob> RenameModelAsync(
+        string jobId,
+        string? name,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<CloudJob>(HttpMethod.Patch, $"/api/v1/models/{jobId}", new { name }, cancellationToken);
+
     public async Task<CloudJob> WaitForJobAsync(
         string jobId,
         Action<CloudJob>? changed = null,

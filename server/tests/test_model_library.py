@@ -111,3 +111,34 @@ def test_initialize_normalizes_legacy_completed_progress(tmp_path: Path) -> None
     assert row is not None
     assert row["progress_stage"] == "completed"
     assert row["progress_percent"] == 100
+
+
+def test_official_baseline_is_identified_and_keeps_a_default_name(tmp_path: Path) -> None:
+    _, database, _ = make_passed_job(tmp_path)
+    database.approve_job("a" * 32, "tester")
+
+    database.configure_model_library("d" * 32)
+    baseline = database.get_job("a" * 32)
+    assert baseline is not None
+    assert baseline["is_official_baseline"] == 1
+    assert baseline["model_name"] == "MoveToPlay 官方基线模型"
+
+    assert database.rename_model("a" * 32, None)
+    reset = database.get_job("a" * 32)
+    assert reset is not None
+    assert reset["model_name"] == "MoveToPlay 官方基线模型"
+
+
+def test_custom_model_can_be_named_and_reset(tmp_path: Path) -> None:
+    _, database, _ = make_passed_job(tmp_path)
+    database.approve_job("a" * 32, "tester")
+
+    assert database.rename_model("a" * 32, "  我的   挥砍模型  ")
+    renamed = database.get_job("a" * 32)
+    assert renamed is not None
+    assert renamed["model_name"] == "我的 挥砍模型"
+
+    assert database.rename_model("a" * 32, None)
+    reset = database.get_job("a" * 32)
+    assert reset is not None
+    assert reset["model_name"] is None

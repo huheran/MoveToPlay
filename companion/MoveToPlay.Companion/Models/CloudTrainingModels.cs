@@ -89,6 +89,21 @@ public sealed class CloudJob
     [JsonPropertyName("model_version")]
     public string? ModelVersion { get; init; }
 
+    [JsonPropertyName("model_name")]
+    public string? ModelName { get; init; }
+
+    [JsonPropertyName("model_name_updated_at")]
+    public string? ModelNameUpdatedAt { get; init; }
+
+    [JsonPropertyName("is_official_baseline")]
+    public bool IsOfficialBaseline { get; init; }
+
+    [JsonPropertyName("dataset_name")]
+    public string? DatasetName { get; init; }
+
+    [JsonPropertyName("base_dataset_id")]
+    public string? BaseDatasetId { get; init; }
+
     [JsonPropertyName("is_active_model")]
     public bool IsActiveModel { get; init; }
 
@@ -139,6 +154,23 @@ public sealed class CloudJob
         ? $"{ProgressPercent:0}% · {ProgressDetail ?? "训练中"}"
         : StatusDisplay;
     public string VersionDisplay => string.IsNullOrWhiteSpace(ModelVersion) ? $"JOB {ShortId}" : ModelVersion;
+    public string ModelNameDisplay => !string.IsNullOrWhiteSpace(ModelName)
+        ? ModelName
+        : IsOfficialBaseline
+            ? "MoveToPlay 官方基线模型"
+            : $"自训练模型 · {CreatedDisplay}";
+    public string ModelKindDisplay => IsOfficialBaseline ? "官方基线" : "玩家模型";
+    public string ModelSourceDisplay => IsOfficialBaseline
+        ? "数据来源：完整官方原始数据"
+        : !string.IsNullOrWhiteSpace(BaseDatasetId)
+            ? "数据来源：官方数据 + 玩家所选采集数据"
+            : $"数据来源：{DatasetName ?? "独立数据集"}";
+    public string TaskTitleDisplay => Mode == "validate"
+        ? "数据校验任务"
+        : !string.IsNullOrWhiteSpace(ApprovedAt)
+            ? ModelNameDisplay
+            : "模型训练任务";
+    public string DatasetDisplay => $"数据集：{DatasetName ?? DatasetId}";
     public string ActiveDisplay => IsActiveModel ? "当前采用" : "历史版本";
     public string BackupDisplay => OssBackupStatus switch
     {

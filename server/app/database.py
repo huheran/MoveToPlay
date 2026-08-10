@@ -82,7 +82,10 @@ class Database:
                     firmware_detail TEXT,
                     firmware_progress_percent REAL NOT NULL DEFAULT 0,
                     firmware_built_at TEXT,
-                    firmware_error TEXT
+                    firmware_error TEXT,
+                    model_name TEXT,
+                    model_name_updated_at TEXT,
+                    is_official_baseline INTEGER NOT NULL DEFAULT 0
                 );
 
                 CREATE INDEX IF NOT EXISTS jobs_status_created_idx
@@ -121,6 +124,9 @@ class Database:
                 "firmware_progress_percent": "REAL NOT NULL DEFAULT 0",
                 "firmware_built_at": "TEXT",
                 "firmware_error": "TEXT",
+                "model_name": "TEXT",
+                "model_name_updated_at": "TEXT",
+                "is_official_baseline": "INTEGER NOT NULL DEFAULT 0",
             }
             for name, definition in migrations.items():
                 if name not in job_columns:
@@ -160,6 +166,28 @@ class Database:
                 if latest is not None:
                     connection.execute("UPDATE jobs SET is_active_model = 1 WHERE id = ?", (latest["id"],))
         self.path.chmod(0o600)
+
+    def configure_model_library(self, official_dataset_id: str | None) -> None:
+        """标记唯一的官方基线模型，并为它补上稳定的人类可读名称。"""
+        with self.connect() as connection:
+            connection.execute("UPDATE jobs SET is_official_baseline = 0")
+            if official_dataset_id is None:
+                return
+            baseline = connection.execute(
+                """SELECT id FROM jobs
+                   WHERE dataset_id = ? AND mode = 'train' AND approved_at IS NOT NULL
+                   ORDER BY COALESCE(finished_at, created_at), id LIMIT 1""",
+                (official_dataset_id,),
+            ).fetchone()
+            if baseline is None:
+                return
+            connection.execute(
+                """UPDATE jobs SET is_official_baseline = 1,
+                   model_name = CASE WHEN model_name IS NULL OR TRIM(model_name) = ''
+                       THEN 'MoveToPlay 官方基线模型' ELSE model_name END
+                   WHERE id = ?""",
+                (baseline["id"],),
+            )
 
     @staticmethod
     def _row(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -238,11 +266,22 @@ class Database:
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
-            return self._row(connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
+            return self._row(connection.execute(
+                """SELECT jobs.*, datasets.name AS dataset_name,
+                          datasets.base_dataset_id AS base_dataset_id
+                   FROM jobs JOIN datasets ON datasets.id = jobs.dataset_id
+                   WHERE jobs.id = ?""",
+                (job_id,),
+            ).fetchone())
 
     def list_jobs(self) -> list[dict[str, Any]]:
         with self.connect() as connection:
-            rows = connection.execute("SELECT * FROM jobs ORDER BY created_at DESC").fetchall()
+            rows = connection.execute(
+                """SELECT jobs.*, datasets.name AS dataset_name,
+                          datasets.base_dataset_id AS base_dataset_id
+                   FROM jobs JOIN datasets ON datasets.id = jobs.dataset_id
+                   ORDER BY jobs.created_at DESC"""
+            ).fetchall()
         return [dict(row) for row in rows]
 
     def claim_next_job(self) -> dict[str, Any] | None:
@@ -414,9 +453,30 @@ class Database:
     def list_models(self) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM jobs WHERE approved_at IS NOT NULL ORDER BY approved_at DESC"
+                """SELECT jobs.*, datasets.name AS dataset_name,
+                          datasets.base_dataset_id AS base_dataset_id
+                   FROM jobs JOIN datasets ON datasets.id = jobs.dataset_id
+                   WHERE jobs.approved_at IS NOT NULL ORDER BY jobs.approved_at DESC"""
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def rename_model(self, job_id: str, name: str | None) -> bool:
+        with self.connect() as connection:
+            row = connection.execute(
+                """SELECT id, is_official_baseline FROM jobs
+                   WHERE id = ? AND approved_at IS NOT NULL AND status = 'passed'""",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            normalized = " ".join(name.strip().split())[:60] if name else None
+            if not normalized and row["is_official_baseline"]:
+                normalized = "MoveToPlay 官方基线模型"
+            connection.execute(
+                "UPDATE jobs SET model_name = ?, model_name_updated_at = ? WHERE id = ?",
+                (normalized, utc_now(), job_id),
+            )
+            return True
 
     def activate_model(self, job_id: str) -> bool:
         with self.connect() as connection:
