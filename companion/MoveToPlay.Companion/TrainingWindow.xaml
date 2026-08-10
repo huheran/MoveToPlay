@@ -473,8 +473,9 @@
                                                 <Grid>
                                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                                     <StackPanel>
-                                                        <TextBlock FontWeight="SemiBold" Text="{Binding CreatedDisplay}" />
-                                                        <TextBlock Margin="0,4,0,0" FontSize="10" FontFamily="Consolas" Foreground="#FF718096" Text="{Binding Id}" />
+                                                        <TextBlock FontWeight="SemiBold" Text="{Binding TaskTitleDisplay}" />
+                                                        <TextBlock Margin="0,4,0,0" FontSize="11" Foreground="#FF93A3B8" Text="{Binding CreatedDisplay}" />
+                                                        <TextBlock Margin="0,3,0,0" FontSize="10" Foreground="#FF718096" Text="{Binding DatasetDisplay}" TextTrimming="CharacterEllipsis" />
                                                         <TextBlock Margin="0,5,0,0" Foreground="#FF9BE7DB" Text="{Binding ProgressDisplay}" TextWrapping="Wrap" />
                                                     </StackPanel>
                                                     <TextBlock Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Top"
@@ -515,17 +516,42 @@
                                             <Border Padding="11" Background="#FF0A111C" BorderBrush="#FF263246" BorderThickness="1" CornerRadius="9">
                                                 <StackPanel>
                                                     <Grid>
-                                                        <TextBlock FontWeight="SemiBold" Foreground="#FF2DD4BF" Text="{Binding VersionDisplay}" />
+                                                        <TextBlock Margin="0,0,90,0" FontSize="15" FontWeight="SemiBold" Foreground="#FF2DD4BF"
+                                                                   Text="{Binding ModelNameDisplay}" TextTrimming="CharacterEllipsis" />
                                                         <TextBlock HorizontalAlignment="Right" Foreground="#FFFFC857" Text="{Binding ActiveDisplay}" />
                                                     </Grid>
-                                                    <TextBlock Margin="0,5,0,0" Text="{Binding CreatedDisplay}" />
-                                                    <TextBlock Margin="0,4,0,0" FontSize="10" Foreground="#FF93A3B8" Text="{Binding BackupDisplay}" />
+                                                    <WrapPanel Margin="0,6,0,0">
+                                                        <Border Margin="0,0,7,0" Padding="6,2" Background="#FF16332F" CornerRadius="4">
+                                                            <TextBlock FontSize="10" Foreground="#FF9BE7DB" Text="{Binding ModelKindDisplay}" />
+                                                        </Border>
+                                                        <TextBlock VerticalAlignment="Center" FontSize="10" FontFamily="Consolas"
+                                                                   Foreground="#FF93A3B8" Text="{Binding VersionDisplay}" />
+                                                    </WrapPanel>
+                                                    <TextBlock Margin="0,5,0,0" FontSize="11" Foreground="#FFB5C2D4"
+                                                               Text="{Binding ModelSourceDisplay}" TextWrapping="Wrap" />
+                                                    <TextBlock Margin="0,4,0,0" FontSize="10" Foreground="#FF718096" Text="{Binding CreatedDisplay}" />
+                                                    <TextBlock Margin="0,3,0,0" FontSize="10" Foreground="#FF93A3B8">
+                                                        <Run Text="{Binding FirmwareDisplay}" /><Run Text=" · " /><Run Text="{Binding BackupDisplay}" />
+                                                    </TextBlock>
                                                 </StackPanel>
                                             </Border>
                                         </DataTemplate>
                                     </ListBox.ItemTemplate>
                                 </ListBox>
                                 <StackPanel Grid.Row="2" Margin="0,10,0,0">
+                                    <TextBlock FontSize="11" Foreground="#FFB5C2D4" Text="模型名称（可修改，不影响唯一版本号）" />
+                                    <Grid Margin="0,5,0,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="ModelNameTextBox" MaxLength="60" IsEnabled="False" />
+                                        <Button Grid.Column="1" x:Name="SaveModelNameButton" Margin="8,0,0,0" IsEnabled="False"
+                                                Style="{StaticResource Primary}" Content="保存名称" Click="SaveModelName_Click" />
+                                        <Button Grid.Column="2" x:Name="ResetModelNameButton" Margin="8,0,0,0" IsEnabled="False"
+                                                Content="恢复默认" Click="ResetModelName_Click" />
+                                    </Grid>
                                     <Grid>
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                         <ComboBox x:Name="RollbackPortSelector" SelectionChanged="RollbackPortSelector_SelectionChanged" />

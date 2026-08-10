@@ -154,6 +154,14 @@ def test_upload_validate_and_download_manifest(tmp_path: Path) -> None:
         models = client.get("/api/v1/models", headers=TOKEN_HEADER)
         assert models.status_code == 200
         assert [model["id"] for model in models.json()] == [train_job_id]
+        renamed = client.patch(
+            f"/api/v1/models/{train_job_id}",
+            headers=TOKEN_HEADER,
+            json={"name": "评委演示挥砍模型"},
+        )
+        assert renamed.status_code == 200
+        assert renamed.json()["model_name"] == "评委演示挥砍模型"
+        assert renamed.json()["dataset_name"] == "API integration dataset"
         activated = client.post(f"/api/v1/models/{train_job_id}/activate", headers=TOKEN_HEADER)
         assert activated.status_code == 200
         assert activated.json()["is_active_model"] is True

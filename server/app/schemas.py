@@ -39,3 +39,15 @@ class ApprovalCreate(BaseModel):
 
 class FirmwareBuildCreate(BaseModel):
     force: bool = False
+
+
+class ModelRename(BaseModel):
+    name: str | None = Field(default=None, max_length=60)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.strip().split())
+        return normalized or None

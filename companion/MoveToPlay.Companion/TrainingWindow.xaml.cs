@@ -93,6 +93,11 @@ public partial class TrainingWindow : Window
         {
             TrainingTabs.SelectedIndex = 2;
         }
+        else if (Environment.GetCommandLineArgs().Any(argument =>
+                     argument.Equals("--training-tab=models", StringComparison.OrdinalIgnoreCase)))
+        {
+            TrainingTabs.SelectedIndex = 3;
+        }
         CollectionRootText.Text = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "MoveToPlay", "collections");
         DatasetNameText.Text = $"决赛演示采集-{DateTime.Now:yyyy-MM-dd-HHmm}";
@@ -1099,6 +1104,8 @@ public partial class TrainingWindow : Window
         }
         try
         {
+            var selectedJobId = (JobHistoryList.SelectedItem as CloudJob)?.Id;
+            var selectedModelId = (ModelVersionList.SelectedItem as CloudJob)?.Id;
             var jobsTask = _api.ListJobsAsync(cancellationToken);
             var modelsTask = _api.ListModelsAsync(cancellationToken);
             await Task.WhenAll(jobsTask, modelsTask);
@@ -1112,6 +1119,8 @@ public partial class TrainingWindow : Window
             {
                 _modelVersions.Add(model);
             }
+            JobHistoryList.SelectedItem = _jobHistory.FirstOrDefault(item => item.Id == selectedJobId);
+            ModelVersionList.SelectedItem = _modelVersions.FirstOrDefault(item => item.Id == selectedModelId);
             HistoryStatusText.Text = $"共 {_jobHistory.Count} 个任务 · {_modelVersions.Count} 个已批准模型";
         }
         catch (OperationCanceledException)
@@ -1129,10 +1138,71 @@ public partial class TrainingWindow : Window
 
     private void ModelVersionList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        var selected = ModelVersionList.SelectedItem is CloudJob;
+        var model = ModelVersionList.SelectedItem as CloudJob;
+        var selected = model is not null;
         LoadModelVersionButton.IsEnabled = selected;
         RebuildModelFirmwareButton.IsEnabled = selected;
         RollbackModelButton.IsEnabled = selected && RollbackPortSelector.SelectedItem is string;
+        ModelNameTextBox.IsEnabled = selected;
+        SaveModelNameButton.IsEnabled = selected;
+        ResetModelNameButton.IsEnabled = selected;
+        ModelNameTextBox.Text = model?.ModelNameDisplay ?? "";
+    }
+
+    private async void SaveModelName_Click(object sender, RoutedEventArgs e)
+    {
+        if (_api is null || ModelVersionList.SelectedItem is not CloudJob selected)
+        {
+            return;
+        }
+        var name = string.Join(' ', ModelNameTextBox.Text.Trim()
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            MessageBox.Show(this, "请输入一个便于辨认的模型名称，或点击“恢复默认”。", "模型名称为空",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        try
+        {
+            SaveModelNameButton.IsEnabled = false;
+            await _api.RenameModelAsync(selected.Id, name);
+            await RefreshHistoryAsync(CancellationToken.None);
+            HistoryStatusText.Text = $"模型已命名为“{name}”；技术版本号保持不变";
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, exception.Message, "保存模型名称失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            SaveModelNameButton.IsEnabled = ModelVersionList.SelectedItem is CloudJob;
+        }
+    }
+
+    private async void ResetModelName_Click(object sender, RoutedEventArgs e)
+    {
+        if (_api is null || ModelVersionList.SelectedItem is not CloudJob selected)
+        {
+            return;
+        }
+        try
+        {
+            ResetModelNameButton.IsEnabled = false;
+            await _api.RenameModelAsync(selected.Id, null);
+            await RefreshHistoryAsync(CancellationToken.None);
+            HistoryStatusText.Text = selected.IsOfficialBaseline
+                ? "已恢复官方基线默认名称"
+                : "已恢复按训练时间生成的默认名称";
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, exception.Message, "恢复默认名称失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            ResetModelNameButton.IsEnabled = ModelVersionList.SelectedItem is CloudJob;
+        }
     }
 
     private async void LoadSelectedHistoryJob_Click(object sender, RoutedEventArgs e)
@@ -1496,7 +1566,8 @@ public partial class TrainingWindow : Window
         }
         var confirmation = MessageBox.Show(
             this,
-            $"将回滚到 {selected.VersionDisplay}，下载其云端固件并通过 {port} 烧录。\n\n" +
+            $"将回滚到“{selected.ModelNameDisplay}”\n版本：{selected.VersionDisplay}\n" +
+            $"下载其云端固件并通过 {port} 烧录。\n\n" +
             "请确认 Dongle 已进入蓝灯维护模式，烧录期间不要拔线。是否继续？",
             "一键回滚模型",
             MessageBoxButton.YesNo,
@@ -1544,9 +1615,9 @@ public partial class TrainingWindow : Window
             }
             RollbackProgress.IsIndeterminate = false;
             RollbackProgress.Value = 100;
-            RollbackStatusText.Text = $"已回滚到 {selected.VersionDisplay}；请重启 Dongle 回绿色 Play 模式";
+            RollbackStatusText.Text = $"已回滚到“{selected.ModelNameDisplay}”；请重启 Dongle 回绿色 Play 模式";
             await RefreshHistoryAsync(CancellationToken.None);
-            MessageBox.Show(this, $"已成功回滚并烧录 {selected.VersionDisplay}。", "模型回滚完成",
+            MessageBox.Show(this, $"已成功回滚并烧录“{selected.ModelNameDisplay}”。\n版本：{selected.VersionDisplay}", "模型回滚完成",
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception exception)

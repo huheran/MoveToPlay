@@ -48,7 +48,8 @@ Authorization: Bearer <token>
 - `GET /api/v1/jobs/{id}/artifacts`：列出运行产物。
 - `GET /api/v1/jobs/{id}/artifacts/{path}`：下载单个产物。
 - `POST /api/v1/jobs/{id}/approve`：人工批准状态为 `passed` 的训练任务。
-- `GET /api/v1/models`：列出全部已批准模型版本及当前采用、OSS 备份状态。
+- `GET /api/v1/models`：列出全部已批准模型版本及名称、来源、当前采用、固件和 OSS 备份状态。
+- `PATCH /api/v1/models/{id}`：修改模型的人类可读名称，请求体为 `{ "name": "评委演示模型" }`；传 `null` 恢复默认名称，技术版本号不变。
 - `POST /api/v1/models/{id}/activate`：把已批准历史版本设为当前采用模型。
 
 任务响应同时返回 `progress_stage`、`progress_detail`、`progress_percent`、

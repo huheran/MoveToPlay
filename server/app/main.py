@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse
 from .config import Settings
 from .database import Database
 from .oss_backup import backup_approved_model, remove_backup_staging
-from .schemas import ApprovalCreate, DatasetCreate, FirmwareBuildCreate, JobCreate
+from .schemas import ApprovalCreate, DatasetCreate, FirmwareBuildCreate, JobCreate, ModelRename
 from .storage import dataset_dir, dataset_file, sha256_file, validate_csv_header
 
 
@@ -65,6 +65,9 @@ def job_response(row: dict) -> dict:
             "progress_percent",
             "estimated_remaining_seconds",
             "model_version",
+            "model_name",
+            "model_name_updated_at",
+            "is_official_baseline",
             "is_active_model",
             "oss_backup_status",
             "oss_object_key",
@@ -88,6 +91,9 @@ def job_response(row: dict) -> dict:
             elapsed = 0
     response["elapsed_seconds"] = elapsed
     response["is_active_model"] = bool(row.get("is_active_model"))
+    response["is_official_baseline"] = bool(row.get("is_official_baseline"))
+    response["dataset_name"] = row.get("dataset_name")
+    response["base_dataset_id"] = row.get("base_dataset_id")
     if row.get("status") == "running" and row.get("estimated_remaining_seconds") is not None:
         since_update = 0
         try:
@@ -124,6 +130,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         active_settings.ensure_directories()
         database = Database(active_settings.database_path)
         database.initialize()
+        database.configure_model_library(active_settings.official_dataset_id)
         remove_backup_staging(active_settings)
         application.state.database = database
         application.state.settings = active_settings
@@ -352,6 +359,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail="only a passed training job can be approved")
         if row["approved_at"] is None:
             request.app.state.database.approve_job(job_id, payload.approved_by)
+            request.app.state.database.configure_model_library(
+                request.app.state.settings.official_dataset_id
+            )
         approved = request.app.state.database.get_job(job_id)
         assert approved is not None
         if approved["run_dir"]:
@@ -401,6 +411,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def activate_model(job_id: str, request: Request) -> dict:
         if not request.app.state.database.activate_model(job_id):
             raise HTTPException(status_code=409, detail="only an approved passed model can be activated")
+        row = request.app.state.database.get_job(job_id)
+        assert row is not None
+        return job_response(row)
+
+    @application.patch("/api/v1/models/{job_id}", dependencies=protected)
+    def rename_model(job_id: str, payload: ModelRename, request: Request) -> dict:
+        if not request.app.state.database.rename_model(job_id, payload.name):
+            raise HTTPException(
+                status_code=409, detail="only an approved passed model can be renamed"
+            )
         row = request.app.state.database.get_job(job_id)
         assert row is not None
         return job_response(row)
