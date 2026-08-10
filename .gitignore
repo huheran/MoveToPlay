@@ -19,6 +19,7 @@ companion/**/bin/
 companion/**/obj/
 companion/**/preview*.png
 companion/**/companion-error.log
+companion/**/team-cloud.bootstrap.json
 
 # 临时文件
 *.log
