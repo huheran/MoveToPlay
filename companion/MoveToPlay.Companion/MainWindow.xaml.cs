@@ -22,7 +22,7 @@ namespace MoveToPlay.Companion;
 
 public partial class MainWindow : Window
 {
-    private const int PostWorkoutHeartRateMeasurementSeconds = 15;
+    private const int PostWorkoutHeartRateMeasurementSeconds = 10;
 
     private sealed record OverlayAnchorOption(string Id, string DisplayName)
     {
@@ -193,7 +193,7 @@ public partial class MainWindow : Window
             EndWorkoutButton_Click(this, new RoutedEventArgs());
             ShowHeartRateFailure(
                 "心率测量失败，报告尚未生成",
-                "请擦拭传感器、完整盖住探头并保持静止15秒；也可以跳过心率。");
+                "请擦拭传感器、完整盖住探头并保持静止10秒；也可以使用运动数据估算心率。");
             await Task.Delay(150);
             var failureOutputPath = Path.GetFullPath(
                 heartRateFailureCaptureArgument["--capture-heart-rate-failure=".Length..].Trim('"'));
@@ -211,7 +211,7 @@ public partial class MainWindow : Window
             EndWorkoutButton_Click(this, new RoutedEventArgs());
             ShowHeartRateFailure(
                 "心率测量失败，报告尚未生成",
-                "可以重新测量，或跳过心率直接保存本次运动报告。");
+                "可以重新测量，或使用清楚标注的估算心率保存本次运动报告。");
             SkipHeartRateAndGenerateReport_Click(this, new RoutedEventArgs());
             await Task.Delay(150);
             var skippedReportOutputPath = Path.GetFullPath(
@@ -227,7 +227,7 @@ public partial class MainWindow : Window
         if (reportCaptureArgument is not null)
         {
             EndWorkoutButton_Click(this, new RoutedEventArgs());
-            await Task.Delay(TimeSpan.FromSeconds(PostWorkoutHeartRateMeasurementSeconds + 1.5));
+            await Task.Delay(TimeSpan.FromSeconds(PostWorkoutHeartRateMeasurementSeconds + 2.5));
             var reportOutputPath = Path.GetFullPath(
                 reportCaptureArgument["--capture-report=".Length..].Trim('"'));
             CaptureElementToPng(MainShell, reportOutputPath);
@@ -627,14 +627,16 @@ public partial class MainWindow : Window
         {
             ShowHeartRateFailure(
                 "Blade未在线，心率测量无法开始",
-                "请检查小剑电源和无线连接；也可以跳过心率直接生成报告。");
+                "请检查小剑电源和无线连接；本次将使用运动数据估算心率。");
+            GenerateEstimatedHeartRateReport("Blade未在线");
             return;
         }
         if (!_telemetrySource.StartHeartRateMeasurement(PostWorkoutHeartRateMeasurementSeconds))
         {
             ShowHeartRateFailure(
                 "心率测量命令发送失败",
-                "请刷新设备后重新测量；也可以跳过心率直接生成报告。");
+                "请刷新设备后重新测量；本次将使用运动数据估算心率。");
+            GenerateEstimatedHeartRateReport("心率测量命令发送失败");
             return;
         }
 
@@ -659,7 +661,7 @@ public partial class MainWindow : Window
             case HeartRateMeasurementState.WaitingForFinger:
                 _measurementAcknowledged = true;
                 HeartRateMeasureTitle.Text = "请将手指贴住小剑背面";
-                HeartRateMeasureHint.Text = "检测到手指后自动开始15秒测量，请保持静止";
+                HeartRateMeasureHint.Text = "检测到手指后自动开始10秒测量，请保持静止";
                 HeartRateCountdownText.Text = PostWorkoutHeartRateMeasurementSeconds.ToString(CultureInfo.InvariantCulture);
                 break;
             case HeartRateMeasurementState.Measuring:
@@ -669,12 +671,10 @@ public partial class MainWindow : Window
                 HeartRateCountdownText.Text = snapshot.HeartRateRemainingSeconds.ToString(CultureInfo.InvariantCulture);
                 break;
             case HeartRateMeasurementState.Complete when _measurementAcknowledged && snapshot.HeartRate is not null:
-                GenerateWorkoutReport(snapshot.HeartRate.Value);
+                GenerateWorkoutReport(snapshot.HeartRate.Value, HeartRateValueSource.Measured);
                 break;
             case HeartRateMeasurementState.Failed when _measurementAcknowledged:
-                ShowHeartRateFailure(
-                    "心率测量失败，报告尚未生成",
-                    "请擦拭传感器、完整盖住探头并保持静止15秒；也可以跳过心率。");
+                GenerateEstimatedHeartRateReport("MAX30102未得到稳定脉搏波形");
                 break;
         }
     }
@@ -702,10 +702,36 @@ public partial class MainWindow : Window
             return;
         }
         _ = _telemetrySource.StopHeartRateMeasurement();
-        GenerateWorkoutReport(null);
+        GenerateEstimatedHeartRateReport("玩家选择使用估算心率");
     }
 
-    private void GenerateWorkoutReport(int? postWorkoutHeartRate)
+    private void GenerateEstimatedHeartRateReport(string reason)
+    {
+        if (_pendingReportSnapshot is not { } snapshot)
+        {
+            return;
+        }
+
+        _ = _telemetrySource.StopHeartRateMeasurement();
+        var estimatedHeartRate = EstimatePostWorkoutHeartRate(snapshot);
+        GenerateWorkoutReport(estimatedHeartRate, HeartRateValueSource.EstimatedFromActivity, reason);
+    }
+
+    private int EstimatePostWorkoutHeartRate(TelemetrySnapshot snapshot)
+    {
+        var activeMinutes = SessionActiveTime(snapshot).TotalMinutes;
+        var calories = SessionCalories(snapshot);
+        var averageIntensity = _sessionIntensitySamples > 0
+            ? (double)_sessionIntensityTotal / _sessionIntensitySamples
+            : snapshot.IntensityPercent;
+        return HeartRateEstimationService.EstimatePostWorkoutBpm(calories,
+                                                                 activeMinutes,
+                                                                 averageIntensity);
+    }
+
+    private void GenerateWorkoutReport(int? postWorkoutHeartRate,
+                                       HeartRateValueSource heartRateSource,
+                                       string? heartRateNote = null)
     {
         if (_pendingReportSnapshot is not { } snapshot)
         {
@@ -725,6 +751,8 @@ public partial class MainWindow : Window
             ActiveDurationSeconds = SessionActiveTime(snapshot).TotalSeconds,
             EstimatedCalories = Math.Round(SessionCalories(snapshot), 1),
             PostWorkoutHeartRate = postWorkoutHeartRate,
+            PostWorkoutHeartRateSource = heartRateSource,
+            PostWorkoutHeartRateNote = heartRateNote,
             ActionCount = SessionActionCount(snapshot),
             MaxCombo = _sessionMaxCombo,
             AverageIntensityPercent = _sessionIntensitySamples > 0
@@ -738,9 +766,14 @@ public partial class MainWindow : Window
         try
         {
             _lastReportPath = _workoutReportService.Save(report);
-            ReportSaveStatusText.Text = postWorkoutHeartRate is null
-                ? $"已保存（心率未测得）：{Path.GetFileName(_lastReportPath)}"
-                : $"已保存：{Path.GetFileName(_lastReportPath)}";
+            ReportSaveStatusText.Text = heartRateSource switch
+            {
+                HeartRateValueSource.EstimatedFromActivity =>
+                    $"已保存（心率为运动数据估算）：{Path.GetFileName(_lastReportPath)}",
+                HeartRateValueSource.NotAvailable =>
+                    $"已保存（心率未测得）：{Path.GetFileName(_lastReportPath)}",
+                _ => $"已保存：{Path.GetFileName(_lastReportPath)}",
+            };
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -754,6 +787,21 @@ public partial class MainWindow : Window
         ReportHeartRateText.Text = postWorkoutHeartRate is { } heartRate
             ? $"{heartRate} BPM"
             : "未测得";
+        ReportHeartRateSourceText.Text = heartRateSource switch
+        {
+            HeartRateValueSource.Measured => "MAX30102 实测",
+            HeartRateValueSource.EstimatedFromActivity => "QUICK EST.",
+            _ => "未获得心率",
+        };
+        ReportHeartRateSourceText.Foreground = heartRateSource == HeartRateValueSource.EstimatedFromActivity
+            ? new SolidColorBrush(Color.FromRgb(248, 202, 111))
+            : new SolidColorBrush(Color.FromRgb(127, 140, 163));
+        ReportTopActionText.ToolTip = null;
+        if (heartRateSource == HeartRateValueSource.EstimatedFromActivity &&
+            !string.IsNullOrWhiteSpace(heartRateNote))
+        {
+            ReportTopActionText.ToolTip = $"估算原因：{heartRateNote}";
+        }
         ReportActionCountText.Text = $"{report.ActionCount} 次";
         ReportComboText.Text = $"{report.MaxCombo} 次";
         ReportIntensityText.Text = $"{report.AverageIntensityPercent}% / {report.MaxIntensityPercent}%";
@@ -1272,7 +1320,8 @@ public partial class MainWindow : Window
         {
             ShowHeartRateFailure(
                 "Blade未确认心率测量命令",
-                "请检查小剑是否在线后重新测量；也可以跳过心率直接生成报告。");
+                "请检查小剑是否在线；本次将使用运动数据估算心率。");
+            GenerateEstimatedHeartRateReport("Blade未确认心率测量命令");
         }
         if (_telemetryRefreshRunning || _telemetrySuspendedForCollection)
         {

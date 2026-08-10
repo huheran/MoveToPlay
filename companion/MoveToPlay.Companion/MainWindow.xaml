@@ -780,7 +780,7 @@
                                         </StackPanel>
                                         <Button Grid.Column="1" Height="34" VerticalAlignment="Center"
                                                 Style="{StaticResource GhostButton}"
-                                                Content="跳过心率，生成报告"
+                                                Content="使用估算心率生成报告"
                                                 Click="SkipHeartRateAndGenerateReport_Click" />
                                     </Grid>
                                 </Border>
@@ -791,7 +791,7 @@
                                     </Grid.ColumnDefinitions>
                                     <TextBlock VerticalAlignment="Center" MaxWidth="400" FontSize="10" LineHeight="17"
                                                Foreground="#FF8D9BB0" TextWrapping="Wrap"
-                                               Text="运动结束后，小剑背面的MAX30102会开启并进行15秒静止测量，完成后自动生成本次报告。" />
+                                               Text="运动结束后，小剑背面的MAX30102会开启并进行10秒静止测量；若实测失败，将清楚标注并使用运动数据估算心率。" />
                                     <Button x:Name="EndWorkoutButton" Grid.Column="1" Height="42"
                                             Style="{StaticResource PrimaryButton}" Content="结束运动并测量心率"
                                             Click="EndWorkoutButton_Click" />
@@ -808,7 +808,7 @@
                                         CornerRadius="63">
                                     <TextBlock x:Name="HeartRateCountdownText" HorizontalAlignment="Center"
                                                VerticalAlignment="Center" FontSize="54" FontWeight="Black"
-                                               Foreground="#FFFF8DA3" Text="15" />
+                                               Foreground="#FFFF8DA3" Text="10" />
                                 </Border>
                                 <StackPanel Grid.Column="1" Margin="18,0,0,0" VerticalAlignment="Center">
                                     <TextBlock x:Name="HeartRateMeasureTitle" FontSize="19" FontWeight="Bold"
@@ -832,7 +832,7 @@
                                     <StackPanel Margin="0,0,10,8"><TextBlock FontSize="9" Foreground="#FF7F8CA3" Text="本次总时长" /><TextBlock x:Name="ReportDurationText" Margin="0,4,0,0" FontSize="18" FontWeight="Bold" Foreground="#FFF8FAFC" Text="00:00" /></StackPanel>
                                     <StackPanel Margin="5,0,10,8"><TextBlock FontSize="9" Foreground="#FF7F8CA3" Text="有效运动" /><TextBlock x:Name="ReportActiveTimeText" Margin="0,4,0,0" FontSize="18" FontWeight="Bold" Foreground="#FFF8FAFC" Text="00:00" /></StackPanel>
                                     <StackPanel Margin="5,0,10,8"><TextBlock FontSize="9" Foreground="#FF7F8CA3" Text="估算消耗" /><TextBlock x:Name="ReportCaloriesText" Margin="0,4,0,0" FontSize="18" FontWeight="Bold" Foreground="{Binding AccentBrush}" Text="0.0 kcal" /></StackPanel>
-                                    <StackPanel Margin="5,0,0,8"><TextBlock FontSize="9" Foreground="#FF7F8CA3" Text="运动后心率" /><TextBlock x:Name="ReportHeartRateText" Margin="0,4,0,0" FontSize="18" FontWeight="Bold" Foreground="#FFFF8DA3" Text="— BPM" /></StackPanel>
+                                    <StackPanel Margin="5,0,0,8"><TextBlock FontSize="9" Foreground="#FF7F8CA3" Text="运动后心率" /><TextBlock x:Name="ReportHeartRateText" Margin="0,4,0,0" FontSize="18" FontWeight="Bold" Foreground="#FFFF8DA3" Text="— BPM" /><TextBlock x:Name="ReportHeartRateSourceText" Margin="0,1,0,0" FontSize="6" Foreground="#FF7F8CA3" Text="PENDING" /></StackPanel>
                                     <StackPanel Margin="0,5,10,0"><TextBlock FontSize="9" Foreground="#FF7F8CA3" Text="动作事件" /><TextBlock x:Name="ReportActionCountText" Margin="0,4,0,0" FontSize="18" FontWeight="Bold" Foreground="#FFF8FAFC" Text="0 次" /></StackPanel>
                                     <StackPanel Margin="5,5,10,0"><TextBlock FontSize="9" Foreground="#FF7F8CA3" Text="最高连击" /><TextBlock x:Name="ReportComboText" Margin="0,4,0,0" FontSize="18" FontWeight="Bold" Foreground="#FFF8FAFC" Text="0 次" /></StackPanel>
                                     <StackPanel Margin="5,5,10,0"><TextBlock FontSize="9" Foreground="#FF7F8CA3" Text="平均 / 最高强度" /><TextBlock x:Name="ReportIntensityText" Margin="0,4,0,0" FontSize="18" FontWeight="Bold" Foreground="#FF80D9FF" Text="0% / 0%" /></StackPanel>

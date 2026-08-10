@@ -1,5 +1,23 @@
 using MoveToPlay.Companion.Services;
 
+if (args.SequenceEqual(["--heart-rate-estimate"]))
+{
+    var restingFallback = HeartRateEstimationService.EstimatePostWorkoutBpm(0, 0, 0);
+    var moderate = HeartRateEstimationService.EstimatePostWorkoutBpm(45, 12, 55);
+    var vigorous = HeartRateEstimationService.EstimatePostWorkoutBpm(120, 20, 90);
+    if (restingFallback is < 80 or > 180 ||
+        moderate is < 80 or > 180 ||
+        vigorous is < 80 or > 180 ||
+        !(restingFallback < moderate && moderate < vigorous))
+    {
+        throw new InvalidOperationException(
+            $"估算心率结果异常：fallback={restingFallback}, moderate={moderate}, vigorous={vigorous}");
+    }
+    Console.WriteLine(
+        $"[smoke] 心率估算 PASS：fallback={restingFallback}, moderate={moderate}, vigorous={vigorous}");
+    return;
+}
+
 if (args.SequenceEqual(["--collection-library"]))
 {
     var root = Path.Combine(Path.GetTempPath(), $"movetoplay-collection-smoke-{Guid.NewGuid():N}");

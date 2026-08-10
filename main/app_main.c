@@ -177,7 +177,7 @@ static const char *TAG = "imu_main";
 #define BLADE_HEART_RATE_POLL_MS      20
 #define BLADE_HEART_RATE_SERIAL_MS    1000
 #define BLADE_HEART_RATE_FINGER_MIN_IR 10000U
-#define BLADE_HEART_RATE_DEFAULT_MEASUREMENT_SECONDS 15U
+#define BLADE_HEART_RATE_DEFAULT_MEASUREMENT_SECONDS 10U
 #define BLADE_HEART_RATE_FINGER_TIMEOUT_SECONDS 20U
 
 #define BATTERY_REPORT_INTERVAL_MS    5000
@@ -4179,7 +4179,7 @@ static void blade_heart_rate_task(void *arg)
             if (state.finger_present) {
                 measurement_started_us = now_us;
                 measurement_state = M2P_HEART_RATE_STATE_MEASURING;
-                ESP_LOGI(TAG, "heart-rate: ten-second measurement started");
+                ESP_LOGI(TAG, "heart-rate: %u-second measurement started", duration_seconds);
             } else if (finger_wait_started_us > 0 &&
                        now_us - finger_wait_started_us >=
                            (int64_t)BLADE_HEART_RATE_FINGER_TIMEOUT_SECONDS * 1000000LL) {
