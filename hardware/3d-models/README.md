@@ -17,4 +17,6 @@ WD-CODER
 
 ## License
 
-License to be confirmed before public reuse. If these models are intended to be openly reusable, add a clear asset license such as CC BY 4.0 or CC0 1.0.
+These 3D model assets are released under CC0 1.0 Universal. They may be copied, modified, distributed, and used without attribution.
+
+See `LICENSE` in this directory for the license notice.
