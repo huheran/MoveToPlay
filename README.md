@@ -2,7 +2,7 @@
 
 MoveToPlay 是一个把真实肢体运动转换为游戏输入的软硬件一体项目。系统由 ESP32-S3 设备、Windows 桌面端、动作模型训练流水线和云端训练服务组成：Tracker 采集身体节点的 IMU 数据，Dongle 汇总无线数据并执行动作识别，Companion 在电脑端展示运动状态、游戏悬浮层、数据采集和模型更新流程。
 
-本仓库面向项目源码公开与二次开发，包含固件、桌面端、训练脚本、服务端和安装包构建脚本。训练数据、服务器密钥、API Token、安装包产物和本地构建输出不应提交到仓库。
+本仓库面向项目源码公开与二次开发，包含固件、桌面端、随机森林训练数据与脚本、服务端和安装包构建脚本。服务器密钥、API Token、安装包产物、本地个人采集会话和构建输出不应提交到仓库。
 
 ## 功能概览
 
@@ -25,6 +25,7 @@ MoveToPlay/
 │   ├── MoveToPlay.Companion/     # Windows WPF 桌面端
 │   └── MoveToPlay.Companion.Smoke/ # Companion 冒烟测试
 ├── training/                     # 可复现训练流水线和 Docker 环境
+├── data/                         # Git LFS 管理的公开随机森林训练数据
 ├── server/                       # 云端训练 API、worker 与部署脚本
 ├── installer/                    # Windows 安装包构建脚本
 ├── hardware/pcb/                 # 嘉立创 EDA PCB 源工程与硬件版本说明
@@ -140,7 +141,7 @@ docker run --rm `
   movetoplay-training:1
 ```
 
-训练数据默认不进入 Git。数据集 manifest 会记录路径、大小、行数、标签分布和 SHA-256，便于复现和审计。详细说明见 [training/README.md](training/README.md)。
+公开的规范训练数据由 Git LFS 管理。数据集 manifest 会记录路径、大小、行数、标签分布和 SHA-256，便于复现和审计；个人采集会话默认仍不进入 Git。完整的采集、合并、训练和固件集成说明见 [training/README.md](training/README.md)。
 
 ## 云端训练服务
 
@@ -171,11 +172,18 @@ pwsh -File installer/build-team-installer.ps1
 
 ## 公开仓库注意事项
 
-- 不提交 `data/`、`output/`、构建目录、训练产物、安装包产物和本地密钥。
+- 只提交 `data/README.md` 中列出的规范公开数据；不提交个人会话、`output/`、构建目录、训练产物、安装包产物和本地密钥。
 - 不提交真实 API Token、SSH 私钥、OSS Access Key 或服务器环境文件。
 - 不把个人采集数据、未脱敏日志或客户/队友内部配置放入仓库。
 - 发布前检查 `.gitignore` 与 Git 状态，确认只包含可公开源码和文档。
 
 ## 许可证
 
-本仓库当前尚未声明开源许可证。公开前请根据预期授权方式补充 `LICENSE` 文件；在许可证明确前，默认保留所有权利。
+除子目录或第三方文件另有明确声明外：
+
+- 软件、固件、训练工具、服务端和文档：Apache License 2.0，见 [`LICENSE`](LICENSE) 与 [`NOTICE`](NOTICE)。
+- PCB 设计文件：CERN Open Hardware Licence Version 2 - Permissive，见 [`hardware/pcb/LICENSE`](hardware/pcb/LICENSE)。
+- 3D 模型：CC0 1.0 Universal，见 [`hardware/3d-models/LICENSE`](hardware/3d-models/LICENSE)。
+- 公开训练数据：CC0 1.0 Universal，见 [`data/LICENSE`](data/LICENSE)。
+
+除许可证明确授予的权利外，MoveToPlay 的项目名称和标识不因代码开源而自动授予商标许可。

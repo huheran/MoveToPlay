@@ -34,7 +34,16 @@ server/server.env
 logs/
 .DS_Store
 Thumbs.db
-data/
+# 只公开经过整理并在 data/README.md 中声明的数据集；个人会话和临时数据保持本地
+data/*
+!data/LICENSE
+!data/README.md
+!data/processed/
+data/processed/*
+!data/processed/event_samples_combined_slash_full.csv
+!data/processed/event_events_combined_slash_full.csv
+!data/processed/event_samples_combined_slash_full.csv.pre_zhq10_zhq11_20260808_140431.bak
+!data/processed/event_events_combined_slash_full.csv.pre_zhq10_zhq11_20260808_140431.bak
 output/
 output_cnn1d/
 model/
