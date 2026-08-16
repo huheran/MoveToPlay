@@ -28,6 +28,7 @@ MoveToPlay/
 ├── server/                       # 云端训练 API、worker 与部署脚本
 ├── installer/                    # Windows 安装包构建脚本
 ├── hardware/pcb/                 # 嘉立创 EDA PCB 源工程与硬件版本说明
+├── hardware/3d-models/           # SolidWorks、STEP 与 STL 结构模型
 ├── tools/                        # 数据采集、分析、训练和导出工具
 ├── analysis/                     # 动作数据诊断脚本
 ├── partitions*.csv               # ESP32-S3 分区表
@@ -44,17 +45,19 @@ MoveToPlay/
 
 不同模块可以独立开发；只调试 Companion 时不需要安装 ESP-IDF，只运行训练脚本时也不需要连接硬件。
 
-## PCB 硬件
+## PCB 与 3D 模型
 
-嘉立创 EDA PCB 源工程位于 [`hardware/pcb/`](hardware/pcb/README.md)，目前包含：
+嘉立创 EDA PCB 源工程与详细版本说明位于 [`hardware/pcb/`](hardware/pcb/README.md)，SolidWorks、STEP 和 STL 结构模型位于 [`hardware/3d-models/`](hardware/3d-models/README.md)。目前包含：
 
 - MoveToPlay Blade Standard 与 Blade HR
-- Battery Top 与 Battery Bottom 两种 Motion Tracker
-- USB Dongle Rev A、Rev B 与 Rev C
+- Top-Battery 与 Bottom-Battery 两种 Motion Tracker，并分别提供手焊布局和 SMT 标准化布局
+- 三种不同按键的 USB Dongle
 - Charging Dock
 - 独立 Heart-Rate Sensor
 
-公开的 `.eprj2` 文件已移除本地账号元数据，并使用 Git LFS 管理。当前提交以可编辑源工程为主；正式投板前仍应为对应硬件版本补充并核对 Gerber、钻孔文件、BOM、贴片坐标和原理图 PDF。
+Blade 与 Tracker 的 PCB 和 3D 模型均按版本对应：V1.0 PCB 使用 V1.0 模型，V2.0 PCB 使用 V2.0 模型。Tracker 同一版本的手焊版和 SMT 版使用同一套外壳。
+
+公开的 `.eprj2` 文件已移除本地账号元数据，并使用 Git LFS 管理。正式投板前仍应核对 Gerber、钻孔文件、BOM、贴片坐标和原理图 PDF；打印外壳前也应检查模型尺寸、公差和接口方向。
 
 ## 固件构建
 
